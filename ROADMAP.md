@@ -46,9 +46,9 @@ Notes
 	•	Initial implementation will prioritize read-only access
 
 ## Additional UX/Utility Enhancements
-- [ ] Argument allowing users to export results to:
-  - [ ] CSV
-  - [ ] Markdown
-  - [ ] Clipboard(?)
-- [ ] Allow user to toggle single/multi-table output in an argument
-- [ ] Implement color (green for filled slots, yellow for empty-but-not-critical e.g. low % open slots, red for empty-critical)
+1. [x] Argument allowing users to export results to:
+  - [x] CSV (--export csv)
+  - [x] Markdown (--export markdown)
+  - [x] Clipboard (--export clipboard, uses pbcopy/xclip)
+2. [x] Allow user to toggle single/multi-table output in an argument (--separate-weeks)
+3. [x] Implement color (--color flag: green for filled slots, yellow for moderate empties, red for critical empties)

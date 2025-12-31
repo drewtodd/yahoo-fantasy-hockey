@@ -15,10 +15,12 @@ Optimization:
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
+import io
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import requests
 import yaml
@@ -42,6 +44,14 @@ YAHOO_TO_NHL_TRI = {
 }
 
 NHL_BASE = "https://api-web.nhle.com/v1"
+
+# ---------- ANSI Color codes ----------
+class Colors:
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
 
 
 @dataclass(frozen=True)
@@ -170,24 +180,124 @@ def print_bodies_table(grid: List[List[str]]) -> None:
         print(f"{pos:<{pos_w}}  " + "  ".join(f"{c:>{col_w}}" for c in cells))
 
 
+def colorize_cell(cell: str, empties_by_pos: Dict[str, int], pos: str, use_color: bool) -> str:
+    """Apply color to a cell based on filled/empty status and position criticality."""
+    if not use_color or not cell:
+        return cell
+
+    # Green for filled slots
+    if cell == "X":
+        return f"{Colors.GREEN}{cell}{Colors.RESET}"
+
+    # For empty cells, determine criticality based on position
+    # Red if this position has many empties (critical), yellow if moderate
+    empty_count = empties_by_pos.get(pos, 0)
+    if empty_count >= 4:  # Critical: 4+ empty slots for this position
+        return f"{Colors.RED}{cell}{Colors.RESET}"
+    elif empty_count >= 2:  # Warning: 2-3 empty slots
+        return f"{Colors.YELLOW}{cell}{Colors.RESET}"
+
+    return cell
+
+
+def export_to_csv(grid: List[List[str]], header: List[str], output_file: Optional[str] = None) -> str:
+    """Export grid to CSV format. Returns CSV string."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(header)
+    writer.writerows(grid)
+    csv_content = output.getvalue()
+
+    if output_file:
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(csv_content)
+
+    return csv_content
+
+
+def export_to_markdown(grid: List[List[str]], header: List[str], output_file: Optional[str] = None) -> str:
+    """Export grid to Markdown table format. Returns Markdown string."""
+    lines = []
+
+    # Header row
+    lines.append("| " + " | ".join(header) + " |")
+
+    # Separator row
+    lines.append("|" + "|".join(["---"] * len(header)) + "|")
+
+    # Data rows
+    for row in grid:
+        lines.append("| " + " | ".join(row) + " |")
+
+    md_content = "\n".join(lines)
+
+    if output_file:
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(md_content)
+
+    return md_content
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """Attempt to copy text to clipboard using pbcopy (macOS) or xclip (Linux)."""
+    try:
+        import subprocess
+        # Try macOS pbcopy first
+        subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        try:
+            # Try Linux xclip
+            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=True)
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--roster", default="roster.yml", help="Path to roster YAML")
+    ap.add_argument("-r", "--roster", default="roster.yml", help="Path to roster YAML")
     ap.add_argument(
+        "-d",
         "--date",
         default=None,
         help="Any date (YYYY-MM-DD) to determine which Mon-Sun week to analyze. If omitted, uses current week (America/Los_Angeles).",
     )
     ap.add_argument(
+        "-w",
         "--weeks",
         type=int,
         default=1,
         help="Number of consecutive weeks to project (default: 1).",
     )
     ap.add_argument(
+        "-D",
         "--day",
         action="store_true",
         help="Analyze a single day instead of a week. Uses --date if provided, otherwise current date.",
+    )
+    ap.add_argument(
+        "-c",
+        "--color",
+        action="store_true",
+        help="Enable color output (green=filled, yellow=moderate empties, red=critical empties).",
+    )
+    ap.add_argument(
+        "-e",
+        "--export",
+        choices=["csv", "markdown", "clipboard"],
+        help="Export format: csv, markdown, or clipboard.",
+    )
+    ap.add_argument(
+        "-o",
+        "--export-file",
+        help="Output file for export (optional, prints to stdout if omitted). Not used with clipboard.",
+    )
+    ap.add_argument(
+        "-s",
+        "--separate-weeks",
+        action="store_true",
+        help="Display each week in a separate table instead of one unified table (only affects multi-week mode).",
     )
     args = ap.parse_args()
 
@@ -236,12 +346,33 @@ def main() -> int:
             else:
                 empties_by_pos[slot] += 1
 
-        # Print single-day grid
+        # Handle export
+        header = ["POS", day_name[:3]]
+        if args.export:
+            if args.export == "csv":
+                output = export_to_csv(grid, header, args.export_file)
+                if not args.export_file:
+                    print(output)
+            elif args.export == "markdown":
+                output = export_to_markdown(grid, header, args.export_file)
+                if not args.export_file:
+                    print(output)
+            elif args.export == "clipboard":
+                output = export_to_csv(grid, header)
+                if copy_to_clipboard(output):
+                    print("✓ Copied to clipboard")
+                else:
+                    print("✗ Failed to copy to clipboard (pbcopy/xclip not available)", file=sys.stderr)
+            return 0
+
+        # Print single-day grid with optional colors
         col_w = 4
         pos_w = max(len(row[0]) for row in grid)
         print(f"{'POS':<{pos_w}}  {day_name[:3]:>{col_w}}")
         for row in grid:
-            print(f"{row[0]:<{pos_w}}  {row[1]:>{col_w}}")
+            pos = row[0]
+            cell = colorize_cell(row[1], empties_by_pos, pos, args.color) if row[1] else ""
+            print(f"{pos:<{pos_w}}  {cell:>{col_w}}")
 
         print("\nEmpty slots by position:")
         for pos in ["C", "LW", "RW", "D", "G"]:
@@ -297,33 +428,119 @@ def main() -> int:
                     grid[s_i][1 + col_i] = ""
                     empties_by_pos[slot] += 1
 
-    # Print header with dates
-    end_date = all_dates[-1]
-    print(f"\n{initial_week_start.isoformat()} → {end_date.isoformat()}\n")
+    # Handle separate weeks mode
+    if args.separate_weeks and args.weeks > 1:
+        # Display each week as a separate table
+        for week_num in range(args.weeks):
+            week_start = initial_week_start + dt.timedelta(weeks=week_num)
+            week_end = week_start + dt.timedelta(days=6)
+            week_dates = daterange(week_start, 7)
 
-    # Build header with day abbreviations and dates
-    col_w = 8  # Width for date columns like "M(12/29)"
-    pos_w = max(len(slot) for slot in SLOTS)
+            # Extract this week's data from the grid
+            week_grid = []
+            for s_i, slot in enumerate(SLOTS):
+                row_data = [slot]
+                for day_i in range(7):
+                    col_i = week_num * 7 + day_i
+                    row_data.append(grid[s_i][1 + col_i])
+                week_grid.append(row_data)
+
+            # Build header for this week
+            day_abbrevs = ["M", "T", "W", "Th", "F", "Sa", "Su"]
+            header = ["POS"] + [f"{abbr}({d.strftime('%m/%d')})" for abbr, d in zip(day_abbrevs, week_dates)]
+
+            # Handle export for this week
+            if args.export:
+                if args.export == "csv":
+                    output = export_to_csv(week_grid, header, args.export_file if week_num == 0 else None)
+                    if not args.export_file:
+                        print(f"\n=== Week {week_num + 1}: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
+                        print(output)
+                elif args.export == "markdown":
+                    output = export_to_markdown(week_grid, header, args.export_file if week_num == 0 else None)
+                    if not args.export_file:
+                        print(f"\n=== Week {week_num + 1}: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
+                        print(output)
+                elif args.export == "clipboard" and week_num == 0:
+                    output = export_to_csv(week_grid, header)
+                    if copy_to_clipboard(output):
+                        print("✓ Copied first week to clipboard")
+                    else:
+                        print("✗ Failed to copy to clipboard", file=sys.stderr)
+            else:
+                # Print this week
+                print(f"\n=== Week {week_num + 1}: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
+                col_w = 8
+                pos_w = max(len(slot) for slot in SLOTS)
+
+                # Print header
+                print(f"{'POS':<{pos_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
+
+                # Print rows with optional colors
+                for row in week_grid:
+                    pos = row[0]
+                    cells = row[1:]
+                    colored_cells = [colorize_cell(cell, empties_by_pos, pos, args.color) if cell else "" for cell in cells]
+                    print(f"{pos:<{pos_w}}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
+
+        # Print aggregate stats
+        if not args.export:
+            print("\n=== Aggregate Stats ===")
+            print("\nEmpty slots by position (lower is better):")
+            for pos in ["C", "LW", "RW", "D", "G"]:
+                print(f"  {pos}: {empties_by_pos.get(pos, 0)}")
+
+            print("\nFilled starts by position:")
+            for pos in ["C", "LW", "RW", "D", "G"]:
+                print(f"  {pos}: {filled_by_pos.get(pos, 0)}")
+
+        return 0
+
+    # Unified table mode (default)
+    end_date = all_dates[-1]
     day_abbrevs = ["M", "T", "W", "Th", "F", "Sa", "Su"]
 
-    header_parts = [f"{'POS':<{pos_w}}"]
+    # Build header with day abbreviations and dates
+    header = ["POS"]
     for day_date in all_dates:
         day_idx = day_date.weekday()  # 0=Monday
         day_abbrev = day_abbrevs[day_idx]
         date_str = day_date.strftime("%m/%d")
-        day_label = f"{day_abbrev}({date_str})"
-        header_parts.append(f"{day_label:>{col_w}}")
+        header.append(f"{day_abbrev}({date_str})")
 
-    print("  ".join(header_parts))
+    # Handle export
+    if args.export:
+        if args.export == "csv":
+            output = export_to_csv(grid, header, args.export_file)
+            if not args.export_file:
+                print(output)
+        elif args.export == "markdown":
+            output = export_to_markdown(grid, header, args.export_file)
+            if not args.export_file:
+                print(output)
+        elif args.export == "clipboard":
+            output = export_to_csv(grid, header)
+            if copy_to_clipboard(output):
+                print("✓ Copied to clipboard")
+            else:
+                print("✗ Failed to copy to clipboard (pbcopy/xclip not available)", file=sys.stderr)
+        return 0
 
-    # Print each row
+    # Print unified table
+    print(f"\n{initial_week_start.isoformat()} → {end_date.isoformat()}\n")
+
+    col_w = 8  # Width for date columns like "M(12/29)"
+    pos_w = max(len(slot) for slot in SLOTS)
+
+    # Print header
+    print(f"{'POS':<{pos_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
+
+    # Print each row with optional colors
     for row in grid:
         pos = row[0]
         cells = row[1:]
-        row_parts = [f"{pos:<{pos_w}}"]
-        for cell in cells:
-            row_parts.append(f"{cell:>{col_w}}")
-        print("  ".join(row_parts))
+        colored_cells = [colorize_cell(cell, empties_by_pos, pos, args.color) if cell else "" for cell in cells]
+        print(f"{pos:<{pos_w}}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
 
     print("\nEmpty slots by position (lower is better):")
     for pos in ["C", "LW", "RW", "D", "G"]:
