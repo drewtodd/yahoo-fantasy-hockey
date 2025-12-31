@@ -274,6 +274,8 @@ def prompt_user_yes_no(question: str) -> bool:
 
 
 def main() -> int:
+    global SLOTS
+
     ap = argparse.ArgumentParser()
     ap.add_argument("-r", "--roster", default="roster.yml", help="Path to roster YAML")
     ap.add_argument(
@@ -393,7 +395,6 @@ def main() -> int:
 
             # Use league settings for SLOTS if available
             if league_settings.get("slots"):
-                global SLOTS
                 SLOTS = league_settings["slots"]
                 print(f"✓ Using league roster configuration: {SLOTS}")
 
@@ -434,7 +435,6 @@ def main() -> int:
 
             # Use roster slots if defined in YAML
             if roster.get("slots"):
-                global SLOTS
                 SLOTS = roster["slots"]
 
         except FileNotFoundError:

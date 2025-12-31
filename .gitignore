@@ -7,3 +7,5 @@ __pycache__/
 # Yahoo OAuth tokens and credentials
 .yahoo_tokens.json
 yahoo-developer-app-info.md
+.yahoo_cert.pem
+.yahoo_key.pem

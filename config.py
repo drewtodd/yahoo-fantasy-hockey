@@ -49,12 +49,14 @@ class Config:
         self.token_file: str = os.getenv("YAHOO_TOKEN_FILE", ".yahoo_tokens.json")
 
     def validate(self) -> None:
-        """Validate that all required configuration is present."""
+        """Validate that all required configuration is present.
+
+        Note: YAHOO_CLIENT_SECRET is optional for Public Client OAuth apps.
+        """
         missing = []
         if not self.client_id:
             missing.append("YAHOO_CLIENT_ID")
-        if not self.client_secret:
-            missing.append("YAHOO_CLIENT_SECRET")
+        # client_secret is optional for Public Client OAuth
         if not self.league_id:
             missing.append("YAHOO_LEAGUE_ID")
         if not self.team_id:
@@ -68,10 +70,11 @@ class Config:
 
     @property
     def is_configured(self) -> bool:
-        """Check if all required config is present."""
-        return bool(
-            self.client_id and self.client_secret and self.league_id and self.team_id
-        )
+        """Check if all required config is present.
+
+        Note: client_secret is optional for Public Client OAuth.
+        """
+        return bool(self.client_id and self.league_id and self.team_id)
 
 
 # Global config instance

@@ -7,13 +7,18 @@ roster and league configuration from Yahoo Fantasy API.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
+import secrets
+import ssl
+import subprocess
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -28,7 +33,6 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Handle GET request with OAuth code."""
-        # Parse the code from callback URL
         query = urlparse(self.path).query
         params = parse_qs(query)
 
@@ -52,6 +56,8 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
         pass
 
 
+
+
 class YahooClient:
     """Yahoo Fantasy Sports API client with OAuth 2.0 support."""
 
@@ -68,9 +74,49 @@ class YahooClient:
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.token_expiry: Optional[float] = None
+        self.code_verifier: Optional[str] = None  # For PKCE
 
         # Load existing tokens if available
         self._load_tokens()
+
+    def _generate_pkce_pair(self) -> tuple[str, str]:
+        """Generate PKCE code verifier and challenge for Public Client flow."""
+        # Generate random code verifier
+        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+
+        # Generate code challenge (SHA256 hash of verifier)
+        code_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode('utf-8')).digest()
+        ).decode('utf-8').rstrip('=')
+
+        return code_verifier, code_challenge
+
+    def _ensure_ssl_cert(self) -> tuple[str, str]:
+        """Generate self-signed SSL certificate for localhost if it doesn't exist."""
+        cert_file = ".yahoo_cert.pem"
+        key_file = ".yahoo_key.pem"
+
+        if Path(cert_file).exists() and Path(key_file).exists():
+            return cert_file, key_file
+
+        # Generate self-signed certificate using openssl
+        print("Generating self-signed SSL certificate for localhost...")
+        try:
+            subprocess.run([
+                "openssl", "req", "-x509", "-newkey", "rsa:4096",
+                "-keyout", key_file, "-out", cert_file,
+                "-days", "365", "-nodes",
+                "-subj", "/CN=localhost"
+            ], check=True, capture_output=True)
+
+            # Set restrictive permissions
+            os.chmod(cert_file, 0o600)
+            os.chmod(key_file, 0o600)
+
+            print("✓ SSL certificate generated")
+            return cert_file, key_file
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to generate SSL certificate: {e.stderr.decode()}")
 
     def _load_tokens(self) -> None:
         """Load OAuth tokens from file."""
@@ -108,7 +154,7 @@ class YahooClient:
         return time.time() < (self.token_expiry - 60)
 
     def authorize(self) -> None:
-        """Perform OAuth authorization flow."""
+        """Perform OAuth authorization flow with PKCE for Public Client."""
         config.validate()  # Ensure config is present
 
         if self._is_token_valid():
@@ -121,27 +167,43 @@ class YahooClient:
                 print("✓ Token refreshed successfully")
                 return
 
-        # Full authorization flow
+        # Full authorization flow with PKCE (required for Yahoo Public Client)
         print("\nStarting OAuth authorization flow...")
         print("A browser window will open. Please authorize the application.\n")
 
-        # Build authorization URL
+        # Generate PKCE pair
+        self.code_verifier, code_challenge = self._generate_pkce_pair()
+
+        # Ensure SSL certificate exists
+        cert_file, key_file = self._ensure_ssl_cert()
+
+        # Build authorization URL with PKCE (HTTPS required by Yahoo)
         auth_url = (
             f"{self.OAUTH_BASE}/request_auth"
             f"?client_id={config.client_id}"
-            f"&redirect_uri=http://localhost:8000"
+            f"&redirect_uri=https://localhost:8000"
             f"&response_type=code"
+            f"&code_challenge={code_challenge}"
+            f"&code_challenge_method=S256"
             f"&language=en-us"
         )
 
-        # Start local server to receive callback
+        # Start HTTPS server to receive callback
         server = HTTPServer(("localhost", 8000), OAuthCallbackHandler)
         OAuthCallbackHandler.auth_code = None
+
+        # Wrap with SSL
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_file, key_file)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
 
         # Open browser
         webbrowser.open(auth_url)
 
         print("Waiting for authorization...")
+        print("(You may see a browser warning about the self-signed certificate - this is normal)")
+        print("Click 'Advanced' and 'Proceed to localhost' to continue\n")
+
         # Wait for callback (timeout after 5 minutes)
         timeout = time.time() + 300
         while OAuthCallbackHandler.auth_code is None and time.time() < timeout:
@@ -155,15 +217,15 @@ class YahooClient:
         print("✓ Authorization successful")
 
     def _exchange_code_for_token(self, code: str) -> None:
-        """Exchange authorization code for access/refresh tokens."""
+        """Exchange authorization code for access/refresh tokens using PKCE."""
         config.validate()
 
         token_url = f"{self.OAUTH_BASE}/get_token"
         data = {
             "client_id": config.client_id,
-            "client_secret": config.client_secret,
-            "redirect_uri": "http://localhost:8000",
+            "redirect_uri": "https://localhost:8000",
             "code": code,
+            "code_verifier": self.code_verifier,  # PKCE verifier
             "grant_type": "authorization_code",
         }
 
@@ -178,7 +240,7 @@ class YahooClient:
         self._save_tokens()
 
     def _refresh_access_token(self) -> bool:
-        """Refresh access token using refresh token."""
+        """Refresh access token using refresh token (Public Client - no secret needed)."""
         if not self.refresh_token:
             return False
 
@@ -187,8 +249,7 @@ class YahooClient:
         token_url = f"{self.OAUTH_BASE}/get_token"
         data = {
             "client_id": config.client_id,
-            "client_secret": config.client_secret,
-            "redirect_uri": "http://localhost:8000",
+            "redirect_uri": "https://localhost:8000",
             "refresh_token": self.refresh_token,
             "grant_type": "refresh_token",
         }
@@ -226,10 +287,19 @@ class YahooClient:
             "Accept": "application/json",
         }
 
+        # Ensure we request JSON format (Yahoo defaults to XML)
+        if params is None:
+            params = {}
+        params["format"] = "json"
+
         response = requests.get(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
 
-        return response.json()
+        # Parse JSON response
+        try:
+            return response.json()
+        except ValueError as e:
+            raise RuntimeError(f"Invalid JSON response from Yahoo API. Check that the endpoint is correct.")
 
     def fetch_team_roster(self, league_id: Optional[str] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch team roster from Yahoo Fantasy API.
@@ -255,13 +325,35 @@ class YahooClient:
         # Parse response
         try:
             fantasy_content = data["fantasy_content"]
-            league = fantasy_content["league"][0]
-            teams = league["teams"]
-            team = teams["0"]["team"][1]
-            roster = team["roster"]["0"]["players"]
+            # teams data is in the second element of the league array
+            league_teams = fantasy_content["league"][1]
+            teams = league_teams["teams"]
+            team = teams["0"]["team"]
+
+            # Find the roster data in the team array
+            roster_data = None
+            for item in team:
+                if isinstance(item, list):
+                    roster_data = item[0].get("roster") if item else None
+                    if roster_data:
+                        break
+                elif isinstance(item, dict) and "roster" in item:
+                    roster_data = item["roster"]
+                    break
+
+            if not roster_data:
+                raise RuntimeError("No roster data found in team response")
+
+            # roster_data is a list, get first element
+            if isinstance(roster_data, list):
+                roster_dict = roster_data[0]
+            else:
+                roster_dict = roster_data.get("0", {})
+
+            players_data = roster_dict.get("players", {})
 
             players = []
-            for key, player_data in roster.items():
+            for key, player_data in players_data.items():
                 if key == "count":
                     continue
 
@@ -286,8 +378,8 @@ class YahooClient:
 
             return players
 
-        except (KeyError, IndexError, TypeError) as e:
-            raise RuntimeError(f"Failed to parse roster data: {e}")
+        except (KeyError, IndexError, TypeError, AttributeError) as e:
+            raise RuntimeError(f"Failed to parse roster data from Yahoo API: {e}")
 
     def fetch_league_settings(self, league_id: Optional[str] = None) -> Dict[str, Any]:
         """Fetch league roster settings.
@@ -308,16 +400,16 @@ class YahooClient:
 
         try:
             fantasy_content = data["fantasy_content"]
-            league = fantasy_content["league"][0]
-            settings = league["settings"][0]
+            # League metadata is in index 0, settings are in index 1
+            league_info = fantasy_content["league"][0]
+            league_settings = fantasy_content["league"][1]
+            settings = league_settings["settings"][0]
             roster_positions = settings["roster_positions"]
 
             # Parse roster slots
             slots = []
-            for key, pos_data in roster_positions.items():
-                if key == "count":
-                    continue
-
+            # roster_positions is a list of dicts
+            for pos_data in roster_positions:
                 pos = pos_data["roster_position"]
                 position_type = pos["position"]
                 count = int(pos.get("count", 1))
@@ -328,8 +420,8 @@ class YahooClient:
 
             return {
                 "slots": slots,
-                "league_name": league.get("name", ""),
+                "league_name": league_info.get("name", ""),
             }
 
         except (KeyError, IndexError, TypeError) as e:
-            raise RuntimeError(f"Failed to parse league settings: {e}")
+            raise RuntimeError(f"Failed to parse league settings from Yahoo API: {e}")

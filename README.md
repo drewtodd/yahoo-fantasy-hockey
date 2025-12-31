@@ -42,8 +42,9 @@ python create_bodies_table.py --weeks 4 --color
 
 1. **Set up Yahoo Developer App** (one-time setup):
    - Go to https://developer.yahoo.com/apps/
-   - Create a new app with redirect URI: `http://localhost:8000`
-   - Copy your Client ID and Client Secret
+   - Create a new app as a **Public Client** (mobile/native apps)
+   - Set redirect URI: `https://localhost:8000`
+   - Copy your Client ID (no Client Secret needed for Public Client)
 
 2. **Configure credentials**:
    ```bash
@@ -57,10 +58,14 @@ python create_bodies_table.py --weeks 4 --color
 3. **Run with Yahoo integration**:
    ```bash
    # First run will open browser for authorization
-   python create_bodies_table.py --yahoo
+   python create_bodies_table.py
 
-   # Subsequent runs use cached tokens
-   python create_bodies_table.py -y -w 4 -c
+   # Browser will show a security warning (self-signed certificate)
+   # Click 'Advanced' or 'Show Details' and then 'Proceed to localhost'
+   # This is safe - it's your own local HTTPS server
+
+   # Subsequent runs use cached tokens automatically
+   python create_bodies_table.py -w 4 -c
    ```
 
 ## Usage

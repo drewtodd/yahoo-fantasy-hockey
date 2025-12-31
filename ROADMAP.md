@@ -25,25 +25,29 @@ The project has already moved beyond a simple proof of concept. As of now, the s
 
 This baseline is considered stable.
 
-## Phase 1 — Yahoo! API Integration (Near-Term)
+## Phase 1 — Yahoo! API Integration ✅ COMPLETED
 
 🎯 Goal
 
 Eliminate manual roster maintenance and ensure lineup rules exactly match league configuration.
 
 Features
-	•	Authenticate with Yahoo Fantasy Sports API
-	•	Automatically fetch:
-	•	Team roster
-	•	Position eligibility
-	•	League roster configuration (slots, UTIL, bench)
-	•	Replace or augment roster.yml with live data
-	•	Allow fallback to YAML for offline or testing use
+	✅	Authenticate with Yahoo Fantasy Sports API using OAuth 2.0 with PKCE
+	✅	HTTPS support with self-signed certificates for OAuth callback
+	✅	Automatically fetch:
+		✅	Team roster with player names, teams, and position eligibility
+		✅	League roster configuration (slots, positions)
+	✅	Replace or augment roster.yml with live data
+	✅	Allow fallback to YAML for offline or testing use
+	✅	--sync flag to update local roster.yml from Yahoo API
 
-Notes
-	•	OAuth setup will be isolated behind a small client module
-	•	Yahoo data should be cached per run to avoid repeated API calls
-	•	Initial implementation will prioritize read-only access
+Implementation Notes
+	•	OAuth setup isolated in yahoo_client.py module
+	•	Access tokens cached in .yahoo_tokens.json with automatic refresh
+	•	JSON format explicitly requested from Yahoo API (defaults to XML)
+	•	Yahoo Public Client OAuth requires HTTPS redirect URIs
+	•	Self-signed certificates auto-generated using openssl
+	•	Read-only API access (no roster modifications)
 
 ## Additional UX/Utility Enhancements
 1. [x] Argument allowing users to export results to:
