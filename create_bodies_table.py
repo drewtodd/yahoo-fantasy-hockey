@@ -254,6 +254,25 @@ def copy_to_clipboard(text: str) -> bool:
             return False
 
 
+def generate_export_filename(export_format: str) -> str:
+    """Generate timestamped filename for export."""
+    timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    extension = "csv" if export_format == "csv" else "md"
+    return f"yfh-export-{timestamp}.{extension}"
+
+
+def prompt_user_yes_no(question: str) -> bool:
+    """Prompt user with yes/no question."""
+    while True:
+        response = input(f"{question} (y/n): ").strip().lower()
+        if response in ("y", "yes"):
+            return True
+        elif response in ("n", "no"):
+            return False
+        else:
+            print("Please answer 'y' or 'n'")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("-r", "--roster", default="roster.yml", help="Path to roster YAML")
@@ -285,13 +304,13 @@ def main() -> int:
     ap.add_argument(
         "-e",
         "--export",
-        choices=["csv", "markdown", "clipboard"],
-        help="Export format: csv, markdown, or clipboard.",
+        choices=["csv", "md", "markdown", "cp", "clipboard"],
+        help="Export format: csv, md/markdown, or cp/clipboard.",
     )
     ap.add_argument(
         "-o",
         "--export-file",
-        help="Output file for export (optional, prints to stdout if omitted). Not used with clipboard.",
+        help="Output file for export (optional, auto-generates timestamped filename if omitted). Not used with clipboard.",
     )
     ap.add_argument(
         "-s",
@@ -299,21 +318,134 @@ def main() -> int:
         action="store_true",
         help="Display each week in a separate table instead of one unified table (only affects multi-week mode).",
     )
+    ap.add_argument(
+        "-l",
+        "--local",
+        action="store_true",
+        help="Use local roster.yml instead of fetching from Yahoo Fantasy API.",
+    )
+    ap.add_argument(
+        "--sync",
+        action="store_true",
+        help="Fetch roster from Yahoo and save to roster.yml, then exit.",
+    )
     args = ap.parse_args()
+
+    # Normalize export aliases
+    if args.export:
+        if args.export == "md":
+            args.export = "markdown"
+        elif args.export == "cp":
+            args.export = "clipboard"
 
     tz = gettz("America/Los_Angeles")
     today = dt.datetime.now(tz=tz).date()
 
-    with open(args.roster, "r", encoding="utf-8") as f:
-        roster = yaml.safe_load(f)
+    # Handle --sync mode (fetch and save, then exit)
+    if args.sync:
+        try:
+            from yahoo_client import YahooClient
 
-    players: List[Player] = [
-        Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
-        for p in roster.get("players", [])
-    ]
+            print("Fetching roster from Yahoo Fantasy API...")
+            client = YahooClient()
+            client.authorize()
+
+            roster_data = client.fetch_team_roster()
+            league_settings = client.fetch_league_settings()
+
+            # Build YAML structure
+            roster_yaml = {"players": roster_data}
+            if league_settings.get("slots"):
+                roster_yaml["slots"] = league_settings["slots"]
+
+            # Save to file
+            with open(args.roster, "w", encoding="utf-8") as f:
+                yaml.dump(roster_yaml, f, default_flow_style=False, sort_keys=False)
+
+            print(f"✓ Saved {len(roster_data)} players to {args.roster}")
+            if league_settings.get("slots"):
+                print(f"✓ Saved roster slots: {league_settings['slots']}")
+            return 0
+
+        except ImportError:
+            print("Error: Yahoo client not available. Install required dependencies.", file=sys.stderr)
+            return 2
+        except Exception as e:
+            print(f"Error fetching from Yahoo API: {e}", file=sys.stderr)
+            return 2
+
+    # Fetch roster (Yahoo by default, local if --local flag)
+    use_local = args.local
+    yahoo_failed = False
+
+    if not use_local:
+        # Try Yahoo first (default behavior)
+        try:
+            from yahoo_client import YahooClient
+
+            print("Fetching roster from Yahoo Fantasy API...")
+            client = YahooClient()
+            client.authorize()
+
+            # Fetch roster and league settings
+            roster_data = client.fetch_team_roster()
+            league_settings = client.fetch_league_settings()
+
+            # Use league settings for SLOTS if available
+            if league_settings.get("slots"):
+                global SLOTS
+                SLOTS = league_settings["slots"]
+                print(f"✓ Using league roster configuration: {SLOTS}")
+
+            players: List[Player] = [
+                Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
+                for p in roster_data
+            ]
+
+            print(f"✓ Fetched {len(players)} players from Yahoo")
+
+        except ImportError:
+            print("\n⚠ Yahoo client not available. Install required dependencies.", file=sys.stderr)
+            yahoo_failed = True
+        except Exception as e:
+            print(f"\n⚠ Error fetching from Yahoo API: {e}", file=sys.stderr)
+            yahoo_failed = True
+
+        # If Yahoo failed, prompt for fallback
+        if yahoo_failed:
+            if prompt_user_yes_no(f"Would you like to use local roster file ({args.roster})?"):
+                use_local = True
+            else:
+                print("Exiting. Please fix Yahoo API configuration or use --local flag.", file=sys.stderr)
+                return 2
+
+    if use_local:
+        # Load from local YAML file
+        try:
+            with open(args.roster, "r", encoding="utf-8") as f:
+                roster = yaml.safe_load(f)
+
+            players: List[Player] = [
+                Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
+                for p in roster.get("players", [])
+            ]
+
+            print(f"✓ Loaded {len(players)} players from {args.roster}")
+
+            # Use roster slots if defined in YAML
+            if roster.get("slots"):
+                global SLOTS
+                SLOTS = roster["slots"]
+
+        except FileNotFoundError:
+            print(f"Error: Roster file '{args.roster}' not found.", file=sys.stderr)
+            return 2
+        except Exception as e:
+            print(f"Error loading roster file: {e}", file=sys.stderr)
+            return 2
 
     if not players:
-        print("No players found in roster.yml", file=sys.stderr)
+        print("No players found", file=sys.stderr)
         return 2
 
     # Handle single-day mode
@@ -350,13 +482,13 @@ def main() -> int:
         header = ["POS", day_name[:3]]
         if args.export:
             if args.export == "csv":
-                output = export_to_csv(grid, header, args.export_file)
-                if not args.export_file:
-                    print(output)
+                export_file = args.export_file or generate_export_filename("csv")
+                output = export_to_csv(grid, header, export_file)
+                print(f"✓ Exported to {export_file}")
             elif args.export == "markdown":
-                output = export_to_markdown(grid, header, args.export_file)
-                if not args.export_file:
-                    print(output)
+                export_file = args.export_file or generate_export_filename("markdown")
+                output = export_to_markdown(grid, header, export_file)
+                print(f"✓ Exported to {export_file}")
             elif args.export == "clipboard":
                 output = export_to_csv(grid, header)
                 if copy_to_clipboard(output):
@@ -452,15 +584,15 @@ def main() -> int:
             # Handle export for this week
             if args.export:
                 if args.export == "csv":
-                    output = export_to_csv(week_grid, header, args.export_file if week_num == 0 else None)
-                    if not args.export_file:
-                        print(f"\n=== Week {week_num + 1}: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
-                        print(output)
+                    export_file = args.export_file or generate_export_filename("csv")
+                    export_to_csv(week_grid, header, export_file)
+                    if week_num == 0:
+                        print(f"✓ Exported to {export_file}")
                 elif args.export == "markdown":
-                    output = export_to_markdown(week_grid, header, args.export_file if week_num == 0 else None)
-                    if not args.export_file:
-                        print(f"\n=== Week {week_num + 1}: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
-                        print(output)
+                    export_file = args.export_file or generate_export_filename("markdown")
+                    export_to_markdown(week_grid, header, export_file)
+                    if week_num == 0:
+                        print(f"✓ Exported to {export_file}")
                 elif args.export == "clipboard" and week_num == 0:
                     output = export_to_csv(week_grid, header)
                     if copy_to_clipboard(output):
@@ -511,13 +643,13 @@ def main() -> int:
     # Handle export
     if args.export:
         if args.export == "csv":
-            output = export_to_csv(grid, header, args.export_file)
-            if not args.export_file:
-                print(output)
+            export_file = args.export_file or generate_export_filename("csv")
+            export_to_csv(grid, header, export_file)
+            print(f"✓ Exported to {export_file}")
         elif args.export == "markdown":
-            output = export_to_markdown(grid, header, args.export_file)
-            if not args.export_file:
-                print(output)
+            export_file = args.export_file or generate_export_filename("markdown")
+            export_to_markdown(grid, header, export_file)
+            print(f"✓ Exported to {export_file}")
         elif args.export == "clipboard":
             output = export_to_csv(grid, header)
             if copy_to_clipboard(output):

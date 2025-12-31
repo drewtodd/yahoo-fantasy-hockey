@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+
+# Yahoo OAuth tokens and credentials
+.yahoo_tokens.json
+yahoo-developer-app-info.md

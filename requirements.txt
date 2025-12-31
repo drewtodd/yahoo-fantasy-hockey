@@ -1,0 +1,5 @@
+# Core dependencies
+requests>=2.31.0
+pyyaml>=6.0.1
+python-dateutil>=2.8.2
+ortools>=9.8.0

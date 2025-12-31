@@ -52,3 +52,12 @@ Notes
   - [x] Clipboard (--export clipboard, uses pbcopy/xclip)
 2. [x] Allow user to toggle single/multi-table output in an argument (--separate-weeks)
 3. [x] Implement color (--color flag: green for filled slots, yellow for moderate empties, red for critical empties)
+4. [x] Update export to use default targets if none specified
+   - CSV: yfh-export-{{date}}{{time}}.csv
+   - MD: yfh-export-{{date}}{{time}}.md
+5. [x] Update export signifiers to also accept
+   - [x] `md` for Markdown output
+   - [x] `cp` for clipboard
+6. [x] Add argument to fetch data and create/update `roster.yml` file (--sync)
+7. [x] Default to Yahoo API with --local/-l flag for local roster fallback
+8. [x] Prompt user for local fallback when Yahoo API fails
