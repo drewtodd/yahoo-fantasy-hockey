@@ -773,8 +773,9 @@ def main() -> int:
                 pct_w = 6  # "100.0%"
                 col_w = 2 if args.compact else 8  # Compact: "M", Full: "M(12/29)"
 
-                # Print header
-                print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
+                # Print header (center-align in compact mode for better visual balance)
+                header_align = '^' if args.compact else '>'
+                print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:{header_align}{col_w}}" for h in header[1:]))
 
                 # Print rows with EFF, PCT, and optional colors, in sorted order
                 pos_counts = {}
@@ -887,8 +888,9 @@ def main() -> int:
     pct_w = 6  # "100.0%"
     col_w = 2 if args.compact else 8  # Compact: "M", Full: "M(12/29)"
 
-    # Print header
-    print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
+    # Print header (center-align in compact mode for better visual balance)
+    header_align = '^' if args.compact else '>'
+    print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:{header_align}{col_w}}" for h in header[1:]))
 
     # Print each row with EFF, PCT, and optional colors, in sorted order
     pos_counts = {}
