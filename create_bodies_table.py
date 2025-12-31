@@ -547,9 +547,17 @@ def main() -> int:
         for pos in ["C", "LW", "RW", "D", "G"]:
             print(f"  {pos}: {empties_by_pos.get(pos, 0)}")
 
+        # Calculate slots by position for percentages
+        slots_by_pos = {}
+        for slot in SLOTS:
+            slots_by_pos[slot] = slots_by_pos.get(slot, 0) + 1
+
         print("\nFilled slots by position:")
         for pos in ["C", "LW", "RW", "D", "G"]:
-            print(f"  {pos}: {filled_by_pos.get(pos, 0)}")
+            filled = filled_by_pos.get(pos, 0)
+            total = slots_by_pos.get(pos, 0) * 1  # Single day
+            pct = (filled / total * 100) if total > 0 else 0
+            print(f"  {pos}: {filled}/{total} ({pct:.1f}%)")
 
         # Calculate and show idle players
         idle_by_pos = calculate_idle_players(players, SLOTS)
@@ -662,6 +670,11 @@ def main() -> int:
 
         # Print aggregate stats
         if not args.export:
+            # Calculate slots by position for percentages
+            slots_by_pos = {}
+            for slot in SLOTS:
+                slots_by_pos[slot] = slots_by_pos.get(slot, 0) + 1
+
             print("\n=== Aggregate Stats ===")
             print("\nEmpty slots by position (lower is better):")
             for pos in ["C", "LW", "RW", "D", "G"]:
@@ -669,7 +682,10 @@ def main() -> int:
 
             print("\nFilled starts by position:")
             for pos in ["C", "LW", "RW", "D", "G"]:
-                print(f"  {pos}: {filled_by_pos.get(pos, 0)}")
+                filled = filled_by_pos.get(pos, 0)
+                total = slots_by_pos.get(pos, 0) * (args.weeks * 7)
+                pct = (filled / total * 100) if total > 0 else 0
+                print(f"  {pos}: {filled}/{total} ({pct:.1f}%)")
 
             # Calculate and show idle players
             idle_by_pos = calculate_idle_players(players, SLOTS)
@@ -727,13 +743,21 @@ def main() -> int:
         colored_cells = [colorize_cell(cell, empties_by_pos, pos, args.color) if cell else "" for cell in cells]
         print(f"{pos:<{pos_w}}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
 
+    # Calculate slots by position for percentages
+    slots_by_pos = {}
+    for slot in SLOTS:
+        slots_by_pos[slot] = slots_by_pos.get(slot, 0) + 1
+
     print("\nEmpty slots by position (lower is better):")
     for pos in ["C", "LW", "RW", "D", "G"]:
         print(f"  {pos}: {empties_by_pos.get(pos, 0)}")
 
     print("\nFilled starts by position:")
     for pos in ["C", "LW", "RW", "D", "G"]:
-        print(f"  {pos}: {filled_by_pos.get(pos, 0)}")
+        filled = filled_by_pos.get(pos, 0)
+        total = slots_by_pos.get(pos, 0) * total_days
+        pct = (filled / total * 100) if total > 0 else 0
+        print(f"  {pos}: {filled}/{total} ({pct:.1f}%)")
 
     # Calculate and show idle players
     idle_by_pos = calculate_idle_players(players, SLOTS)
