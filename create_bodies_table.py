@@ -180,6 +180,43 @@ def print_bodies_table(grid: List[List[str]]) -> None:
         print(f"{pos:<{pos_w}}  " + "  ".join(f"{c:>{col_w}}" for c in cells))
 
 
+def calculate_idle_players(players: List[Player], slots: List[str]) -> Dict[str, int]:
+    """
+    Calculate idle/surplus players by position.
+
+    An idle player is one who is eligible for a position but there aren't enough
+    roster slots to utilize all eligible players optimally.
+
+    Args:
+        players: List of Player objects with position eligibility
+        slots: List of roster slots (e.g., ['C', 'C', 'LW', 'LW', ...])
+
+    Returns:
+        Dictionary mapping position to count of idle players
+    """
+    # Count roster slots by position
+    slots_by_pos = {}
+    for slot in slots:
+        slots_by_pos[slot] = slots_by_pos.get(slot, 0) + 1
+
+    # Count eligible players by position
+    eligible_by_pos = {}
+    for player in players:
+        for pos in player.pos:
+            eligible_by_pos[pos] = eligible_by_pos.get(pos, 0) + 1
+
+    # Calculate idle players (surplus)
+    idle_by_pos = {}
+    for pos in eligible_by_pos:
+        slot_count = slots_by_pos.get(pos, 0)
+        eligible_count = eligible_by_pos[pos]
+        idle = max(0, eligible_count - slot_count)
+        if idle > 0:
+            idle_by_pos[pos] = idle
+
+    return idle_by_pos
+
+
 def colorize_cell(cell: str, empties_by_pos: Dict[str, int], pos: str, use_color: bool) -> str:
     """Apply color to a cell based on filled/empty status and position criticality."""
     if not use_color or not cell:
@@ -514,6 +551,14 @@ def main() -> int:
         for pos in ["C", "LW", "RW", "D", "G"]:
             print(f"  {pos}: {filled_by_pos.get(pos, 0)}")
 
+        # Calculate and show idle players
+        idle_by_pos = calculate_idle_players(players, SLOTS)
+        if idle_by_pos:
+            print("\nIdle players by position (surplus over roster slots):")
+            for pos in ["C", "LW", "RW", "D", "G"]:
+                if pos in idle_by_pos:
+                    print(f"  {pos}: {idle_by_pos[pos]}")
+
         return 0
 
     # Handle week/multi-week mode
@@ -626,6 +671,14 @@ def main() -> int:
             for pos in ["C", "LW", "RW", "D", "G"]:
                 print(f"  {pos}: {filled_by_pos.get(pos, 0)}")
 
+            # Calculate and show idle players
+            idle_by_pos = calculate_idle_players(players, SLOTS)
+            if idle_by_pos:
+                print("\nIdle players by position (surplus over roster slots):")
+                for pos in ["C", "LW", "RW", "D", "G"]:
+                    if pos in idle_by_pos:
+                        print(f"  {pos}: {idle_by_pos[pos]}")
+
         return 0
 
     # Unified table mode (default)
@@ -681,6 +734,14 @@ def main() -> int:
     print("\nFilled starts by position:")
     for pos in ["C", "LW", "RW", "D", "G"]:
         print(f"  {pos}: {filled_by_pos.get(pos, 0)}")
+
+    # Calculate and show idle players
+    idle_by_pos = calculate_idle_players(players, SLOTS)
+    if idle_by_pos:
+        print("\nIdle players by position (surplus over roster slots):")
+        for pos in ["C", "LW", "RW", "D", "G"]:
+            if pos in idle_by_pos:
+                print(f"  {pos}: {idle_by_pos[pos]}")
 
     return 0
 

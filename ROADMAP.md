@@ -65,3 +65,4 @@ Implementation Notes
 6. [x] Add argument to fetch data and create/update `roster.yml` file (--sync)
 7. [x] Default to Yahoo API with --local/-l flag for local roster fallback
 8. [x] Prompt user for local fallback when Yahoo API fails
+9. [x] Update the calculation to include an "Idle players by position" summary - helps identify roster surpluses where you have more eligible players than roster slots
