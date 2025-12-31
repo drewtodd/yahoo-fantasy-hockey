@@ -552,28 +552,28 @@ def main() -> int:
                     print("✗ Failed to copy to clipboard (pbcopy/xclip not available)", file=sys.stderr)
             return 0
 
-        # Print single-day grid with optional colors
+        # Print single-day grid with EFF and PCT columns
+        slot_names = get_slot_names(SLOTS)
         col_w = 4
-        pos_w = max(len(row[0]) for row in grid)
-        print(f"{'POS':<{pos_w}}  {day_name[:3]:>{col_w}}")
-        for row in grid:
-            pos = row[0]
-            cell = colorize_cell(row[1], empties_by_pos, pos, args.color) if row[1] else ""
-            print(f"{pos:<{pos_w}}  {cell:>{col_w}}")
+        pos_w = max(len(slot_name) for slot_name in slot_names)
+        eff_w = 3  # "1/1"
+        pct_w = 6  # "100.0%"
+
+        print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  {day_name[:3]:>{col_w}}")
+
+        for s_i, (row, slot_name) in enumerate(zip(grid, slot_names)):
+            # Calculate efficiency for this slot
+            filled = 1 if row[1] else 0
+            total = 1
+            pct = (filled / total * 100) if total > 0 else 0
+
+            # Format the row
+            cell = colorize_cell(row[1], empties_by_pos, SLOTS[s_i], args.color) if row[1] else ""
+            print(f"{slot_name:<{pos_w}}  {filled}/{total:>{eff_w-2}}  {pct:>5.1f}%  {cell:>{col_w}}")
 
         print("\nEmpty slots by position:")
         for pos in ["C", "LW", "RW", "D", "G"]:
             print(f"  {pos}: {empties_by_pos.get(pos, 0)}")
-
-        # Calculate per-slot filled stats
-        slot_names = get_slot_names(SLOTS)
-        print("\nFilled starts by slot:")
-        for s_i, (slot, slot_name) in enumerate(zip(SLOTS, slot_names)):
-            # For single day: either 1 or 0
-            filled = 1 if grid[s_i][1] else 0
-            total = 1
-            pct = (filled / total * 100) if total > 0 else 0
-            print(f"  {slot_name}: {filled}/{total} ({pct:.1f}%)")
 
         # Calculate and show idle players
         idle_by_pos = calculate_idle_players(players, SLOTS)
@@ -669,20 +669,28 @@ def main() -> int:
                     else:
                         print("✗ Failed to copy to clipboard", file=sys.stderr)
             else:
-                # Print this week
+                # Print this week with EFF and PCT columns
                 print(f"\n=== Week {week_num + 1}: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
+
+                slot_names = get_slot_names(SLOTS)
                 col_w = 8
-                pos_w = max(len(slot) for slot in SLOTS)
+                pos_w = max(len(slot_name) for slot_name in slot_names)
+                eff_w = 5  # "11/14"
+                pct_w = 6  # "100.0%"
 
                 # Print header
-                print(f"{'POS':<{pos_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
+                print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
 
-                # Print rows with optional colors
-                for row in week_grid:
-                    pos = row[0]
+                # Print rows with EFF, PCT, and optional colors
+                for s_i, (row, slot_name) in enumerate(zip(week_grid, slot_names)):
+                    # Calculate efficiency for this slot across this week (7 days)
                     cells = row[1:]
-                    colored_cells = [colorize_cell(cell, empties_by_pos, pos, args.color) if cell else "" for cell in cells]
-                    print(f"{pos:<{pos_w}}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
+                    filled = sum(1 for cell in cells if cell == "X")
+                    total = 7
+                    pct = (filled / total * 100) if total > 0 else 0
+
+                    colored_cells = [colorize_cell(cell, empties_by_pos, SLOTS[s_i], args.color) if cell else "" for cell in cells]
+                    print(f"{slot_name:<{pos_w}}  {filled:>2}/{total:<2}  {pct:>5.1f}%  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
 
         # Print aggregate stats
         if not args.export:
@@ -690,17 +698,6 @@ def main() -> int:
             print("\nEmpty slots by position (lower is better):")
             for pos in ["C", "LW", "RW", "D", "G"]:
                 print(f"  {pos}: {empties_by_pos.get(pos, 0)}")
-
-            # Calculate per-slot filled stats across all days
-            slot_names = get_slot_names(SLOTS)
-            total_days = args.weeks * 7
-            print("\nFilled starts by slot:")
-            for s_i, (slot, slot_name) in enumerate(zip(SLOTS, slot_names)):
-                # Count filled days for this slot
-                filled = sum(1 for col_i in range(total_days) if grid[s_i][1 + col_i] == "X")
-                total = total_days
-                pct = (filled / total * 100) if total > 0 else 0
-                print(f"  {slot_name}: {filled}/{total} ({pct:.1f}%)")
 
             # Calculate and show idle players
             idle_by_pos = calculate_idle_players(players, SLOTS)
@@ -742,35 +739,32 @@ def main() -> int:
                 print("✗ Failed to copy to clipboard (pbcopy/xclip not available)", file=sys.stderr)
         return 0
 
-    # Print unified table
+    # Print unified table with EFF and PCT columns
     print(f"\n{initial_week_start.isoformat()} → {end_date.isoformat()}\n")
 
+    slot_names = get_slot_names(SLOTS)
     col_w = 8  # Width for date columns like "M(12/29)"
-    pos_w = max(len(slot) for slot in SLOTS)
+    pos_w = max(len(slot_name) for slot_name in slot_names)
+    eff_w = 5  # "11/14"
+    pct_w = 6  # "100.0%"
 
     # Print header
-    print(f"{'POS':<{pos_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
+    print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
 
-    # Print each row with optional colors
-    for row in grid:
-        pos = row[0]
+    # Print each row with EFF, PCT, and optional colors
+    for s_i, (row, slot_name) in enumerate(zip(grid, slot_names)):
         cells = row[1:]
-        colored_cells = [colorize_cell(cell, empties_by_pos, pos, args.color) if cell else "" for cell in cells]
-        print(f"{pos:<{pos_w}}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
+        # Calculate efficiency for this slot across all days
+        filled = sum(1 for cell in cells if cell == "X")
+        total = total_days
+        pct = (filled / total * 100) if total > 0 else 0
+
+        colored_cells = [colorize_cell(cell, empties_by_pos, SLOTS[s_i], args.color) if cell else "" for cell in cells]
+        print(f"{slot_name:<{pos_w}}  {filled:>2}/{total:<2}  {pct:>5.1f}%  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
 
     print("\nEmpty slots by position (lower is better):")
     for pos in ["C", "LW", "RW", "D", "G"]:
         print(f"  {pos}: {empties_by_pos.get(pos, 0)}")
-
-    # Calculate per-slot filled stats across all days
-    slot_names = get_slot_names(SLOTS)
-    print("\nFilled starts by slot:")
-    for s_i, (slot, slot_name) in enumerate(zip(SLOTS, slot_names)):
-        # Count filled days for this slot
-        filled = sum(1 for col_i in range(total_days) if grid[s_i][1 + col_i] == "X")
-        total = total_days
-        pct = (filled / total * 100) if total > 0 else 0
-        print(f"  {slot_name}: {filled}/{total} ({pct:.1f}%)")
 
     # Calculate and show idle players
     idle_by_pos = calculate_idle_players(players, SLOTS)
