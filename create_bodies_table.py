@@ -307,14 +307,17 @@ def pad_colored_cell(colored_cell: str, width: int) -> str:
     Pad a colored cell string to a specific width.
 
     Since the colored cell contains ANSI escape codes, we need to account for
-    the visual width (1 character for the symbol) vs the string length.
+    the visual width vs the string length (which includes invisible ANSI codes).
     """
-    # The visual width is always 1 (the symbol ✓ or ✗)
-    # But the string includes ANSI codes, so we need to pad based on visual width
-    visual_width = 1
+    # Remove ANSI codes to calculate visual width
+    import re
+    ansi_pattern = re.compile(r'\x1b\[[0-9;]*m')
+    visual_text = ansi_pattern.sub('', colored_cell)
+    visual_width = len(visual_text)
+
     padding = width - visual_width
     if padding > 0:
-        # Center the symbol by adding spaces
+        # Center the content by adding spaces
         left_pad = padding // 2
         right_pad = padding - left_pad
         return " " * left_pad + colored_cell + " " * right_pad
@@ -647,6 +650,16 @@ def main() -> int:
             pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
             print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  {cell}")
 
+        # Add summary row
+        total_slots = len(SLOTS)
+        filled_count = sum(1 for s_i in range(len(SLOTS)) if grid[s_i][1])
+        daily_pct = (filled_count / total_slots * 100) if total_slots > 0 else 0
+        daily_color = colorize_percentage(daily_pct)
+        daily_eff_str = f"{daily_color}{filled_count}/{total_slots}{Colors.RESET}"
+        daily_pct_str = f"{daily_color}{daily_pct:5.1f}%{Colors.RESET}"
+        print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  {'─' * col_w}")
+        print(f"{'TOT':<{pos_w}}  {daily_eff_str}  {daily_pct_str}  {filled_count}/{total_slots}")
+
         print("\nEmpty slots by position:")
         for pos in ["C", "LW", "RW", "D", "G"]:
             print(f"  {pos}: {empties_by_pos.get(pos, 0)}")
@@ -783,6 +796,32 @@ def main() -> int:
                     pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
                     print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
 
+                # Add summary row for this week
+                total_slots = len(SLOTS)
+                daily_fills = []
+                for day_i in range(7):
+                    day_filled = sum(1 for s_i in range(len(SLOTS)) if week_grid[s_i][1 + day_i] == "X")
+                    daily_fills.append(day_filled)
+
+                # Overall week stats
+                week_total_filled = sum(daily_fills)
+                week_total_slots = total_slots * 7
+                week_pct = (week_total_filled / week_total_slots * 100) if week_total_slots > 0 else 0
+                week_color = colorize_percentage(week_pct)
+                week_eff_str = f"{week_color}{week_total_filled:>2}/{week_total_slots:<2}{Colors.RESET}"
+                week_pct_str = f"{week_color}{week_pct:5.1f}%{Colors.RESET}"
+
+                # Daily summaries
+                daily_cells = []
+                for day_filled in daily_fills:
+                    day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
+                    day_color = colorize_percentage(day_pct)
+                    day_str = f"{day_color}{day_filled:>2}/{total_slots:<2}{Colors.RESET}"
+                    daily_cells.append(pad_colored_cell(day_str, col_w))
+
+                print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(7)]))
+                print(f"{'TOT':<{pos_w}}  {week_eff_str}  {week_pct_str}  " + "  ".join(daily_cells))
+
         # Print aggregate stats
         if not args.export:
             print("\n=== Aggregate Stats ===")
@@ -870,6 +909,32 @@ def main() -> int:
         eff_str = f"{pct_color}{filled:>2}/{total:<2}{Colors.RESET}"
         pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
         print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
+
+    # Add summary row for all days
+    total_slots = len(SLOTS)
+    daily_fills = []
+    for day_i in range(total_days):
+        day_filled = sum(1 for s_i in range(len(SLOTS)) if grid[s_i][1 + day_i] == "X")
+        daily_fills.append(day_filled)
+
+    # Overall stats
+    overall_total_filled = sum(daily_fills)
+    overall_total_slots = total_slots * total_days
+    overall_pct = (overall_total_filled / overall_total_slots * 100) if overall_total_slots > 0 else 0
+    overall_color = colorize_percentage(overall_pct)
+    overall_eff_str = f"{overall_color}{overall_total_filled:>2}/{overall_total_slots:<2}{Colors.RESET}"
+    overall_pct_str = f"{overall_color}{overall_pct:5.1f}%{Colors.RESET}"
+
+    # Daily summaries
+    daily_cells = []
+    for day_filled in daily_fills:
+        day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
+        day_color = colorize_percentage(day_pct)
+        day_str = f"{day_color}{day_filled:>2}/{total_slots:<2}{Colors.RESET}"
+        daily_cells.append(pad_colored_cell(day_str, col_w))
+
+    print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(total_days)]))
+    print(f"{'TOT':<{pos_w}}  {overall_eff_str}  {overall_pct_str}  " + "  ".join(daily_cells))
 
     print("\nEmpty slots by position (lower is better):")
     for pos in ["C", "LW", "RW", "D", "G"]:
