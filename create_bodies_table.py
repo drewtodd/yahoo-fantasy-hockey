@@ -657,8 +657,9 @@ def main() -> int:
         daily_color = colorize_percentage(daily_pct)
         daily_eff_str = f"{daily_color}{filled_count}/{total_slots}{Colors.RESET}"
         daily_pct_str = f"{daily_color}{daily_pct:5.1f}%{Colors.RESET}"
+        daily_count_str = f"{daily_color}{filled_count}{Colors.RESET}"
         print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  {'─' * col_w}")
-        print(f"{'TOT':<{pos_w}}  {daily_eff_str}  {daily_pct_str}  {filled_count}/{total_slots}")
+        print(f"{'TOT':<{pos_w}}  {daily_eff_str}  {daily_pct_str}  {daily_count_str}")
 
         print("\nEmpty slots by position:")
         for pos in ["C", "LW", "RW", "D", "G"]:
@@ -816,7 +817,7 @@ def main() -> int:
                 for day_filled in daily_fills:
                     day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
                     day_color = colorize_percentage(day_pct)
-                    day_str = f"{day_color}{day_filled:>2}/{total_slots:<2}{Colors.RESET}"
+                    day_str = f"{day_color}{day_filled:>2}{Colors.RESET}"
                     daily_cells.append(pad_colored_cell(day_str, col_w))
 
                 print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(7)]))
@@ -930,7 +931,7 @@ def main() -> int:
     for day_filled in daily_fills:
         day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
         day_color = colorize_percentage(day_pct)
-        day_str = f"{day_color}{day_filled:>2}/{total_slots:<2}{Colors.RESET}"
+        day_str = f"{day_color}{day_filled:>2}{Colors.RESET}"
         daily_cells.append(pad_colored_cell(day_str, col_w))
 
     print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(total_days)]))
