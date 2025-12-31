@@ -302,6 +302,25 @@ def colorize_percentage(pct: float) -> str:
         return Colors.RED
 
 
+def pad_colored_cell(colored_cell: str, width: int) -> str:
+    """
+    Pad a colored cell string to a specific width.
+
+    Since the colored cell contains ANSI escape codes, we need to account for
+    the visual width (1 character for the symbol) vs the string length.
+    """
+    # The visual width is always 1 (the symbol ✓ or ✗)
+    # But the string includes ANSI codes, so we need to pad based on visual width
+    visual_width = 1
+    padding = width - visual_width
+    if padding > 0:
+        # Center the symbol by adding spaces
+        left_pad = padding // 2
+        right_pad = padding - left_pad
+        return " " * left_pad + colored_cell + " " * right_pad
+    return colored_cell
+
+
 def export_to_csv(grid: List[List[str]], header: List[str], output_file: Optional[str] = None) -> str:
     """Export grid to CSV format. Returns CSV string."""
     output = io.StringIO()
@@ -398,6 +417,11 @@ def main() -> int:
         "--day",
         action="store_true",
         help="Analyze a single day instead of a week. Uses --date if provided, otherwise current date.",
+    )
+    ap.add_argument(
+        "--compact",
+        action="store_true",
+        help="Use compact day headers (M, T, W, Th, F, Sa, Su) instead of full date format.",
     )
     ap.add_argument(
         "-e",
@@ -700,7 +724,10 @@ def main() -> int:
 
             # Build header for this week
             day_abbrevs = ["M", "T", "W", "Th", "F", "Sa", "Su"]
-            header = ["POS"] + [f"{abbr}({d.strftime('%m/%d')})" for abbr, d in zip(day_abbrevs, week_dates)]
+            if args.compact:
+                header = ["POS"] + day_abbrevs
+            else:
+                header = ["POS"] + [f"{abbr}({d.strftime('%m/%d')})" for abbr, d in zip(day_abbrevs, week_dates)]
 
             # Handle export for this week
             if args.export:
@@ -726,10 +753,11 @@ def main() -> int:
 
                 sorted_indices = sort_slots_by_efficiency(SLOTS, week_grid, 7)
 
-                col_w = 8
+                # Column widths
                 pos_w = 3  # "LW1", "RW2", etc.
                 eff_w = 5  # "11/14"
                 pct_w = 6  # "100.0%"
+                col_w = 2 if args.compact else 8  # Compact: "M", Full: "M(12/29)"
 
                 # Print header
                 print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
@@ -749,11 +777,11 @@ def main() -> int:
                     pct = (filled / total * 100) if total > 0 else 0
 
                     # Format with colors
-                    colored_cells = [colorize_cell(cell) for cell in cells]
+                    colored_cells = [pad_colored_cell(colorize_cell(cell), col_w) for cell in cells]
                     pct_color = colorize_percentage(pct)
                     eff_str = f"{pct_color}{filled:>2}/{total:<2}{Colors.RESET}"
                     pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
-                    print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
+                    print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
 
         # Print aggregate stats
         if not args.export:
@@ -778,11 +806,17 @@ def main() -> int:
 
     # Build header with day abbreviations and dates
     header = ["POS"]
-    for day_date in all_dates:
-        day_idx = day_date.weekday()  # 0=Monday
-        day_abbrev = day_abbrevs[day_idx]
-        date_str = day_date.strftime("%m/%d")
-        header.append(f"{day_abbrev}({date_str})")
+    if args.compact:
+        for day_date in all_dates:
+            day_idx = day_date.weekday()  # 0=Monday
+            day_abbrev = day_abbrevs[day_idx]
+            header.append(day_abbrev)
+    else:
+        for day_date in all_dates:
+            day_idx = day_date.weekday()  # 0=Monday
+            day_abbrev = day_abbrevs[day_idx]
+            date_str = day_date.strftime("%m/%d")
+            header.append(f"{day_abbrev}({date_str})")
 
     # Handle export
     if args.export:
@@ -807,10 +841,11 @@ def main() -> int:
 
     sorted_indices = sort_slots_by_efficiency(SLOTS, grid, total_days)
 
-    col_w = 8  # Width for date columns like "M(12/29)"
+    # Column widths
     pos_w = 3  # "LW1", "RW2", etc.
     eff_w = 5  # "11/14"
     pct_w = 6  # "100.0%"
+    col_w = 2 if args.compact else 8  # Compact: "M", Full: "M(12/29)"
 
     # Print header
     print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
@@ -830,11 +865,11 @@ def main() -> int:
         pct = (filled / total * 100) if total > 0 else 0
 
         # Format with colors
-        colored_cells = [colorize_cell(cell) for cell in cells]
+        colored_cells = [pad_colored_cell(colorize_cell(cell), col_w) for cell in cells]
         pct_color = colorize_percentage(pct)
         eff_str = f"{pct_color}{filled:>2}/{total:<2}{Colors.RESET}"
         pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
-        print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
+        print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
 
     print("\nEmpty slots by position (lower is better):")
     for pos in ["C", "LW", "RW", "D", "G"]:
