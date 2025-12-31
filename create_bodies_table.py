@@ -275,24 +275,31 @@ def calculate_idle_players(players: List[Player], slots: List[str]) -> Dict[str,
     return idle_by_pos
 
 
-def colorize_cell(cell: str, empties_by_pos: Dict[str, int], pos: str, use_color: bool) -> str:
-    """Apply color to a cell based on filled/empty status and position criticality."""
-    if not use_color or not cell:
-        return cell
-
-    # Green for filled slots
+def colorize_cell(cell: str) -> str:
+    """
+    Apply color and symbols to cells.
+    - Filled: Green checkmark (✓)
+    - Empty: Red X
+    """
     if cell == "X":
-        return f"{Colors.GREEN}{cell}{Colors.RESET}"
+        return f"{Colors.GREEN}✓{Colors.RESET}"
+    else:
+        return f"{Colors.RED}✗{Colors.RESET}"
 
-    # For empty cells, determine criticality based on position
-    # Red if this position has many empties (critical), yellow if moderate
-    empty_count = empties_by_pos.get(pos, 0)
-    if empty_count >= 4:  # Critical: 4+ empty slots for this position
-        return f"{Colors.RED}{cell}{Colors.RESET}"
-    elif empty_count >= 2:  # Warning: 2-3 empty slots
-        return f"{Colors.YELLOW}{cell}{Colors.RESET}"
 
-    return cell
+def colorize_percentage(pct: float) -> str:
+    """
+    Apply color to percentage values based on performance thresholds.
+    - Green (good): >= 70%
+    - Yellow (warning): 40-69%
+    - Red (bad): < 40%
+    """
+    if pct >= 70:
+        return Colors.GREEN
+    elif pct >= 40:
+        return Colors.YELLOW
+    else:
+        return Colors.RED
 
 
 def export_to_csv(grid: List[List[str]], header: List[str], output_file: Optional[str] = None) -> str:
@@ -391,12 +398,6 @@ def main() -> int:
         "--day",
         action="store_true",
         help="Analyze a single day instead of a week. Uses --date if provided, otherwise current date.",
-    )
-    ap.add_argument(
-        "-c",
-        "--color",
-        action="store_true",
-        help="Enable color output (green=filled, yellow=moderate empties, red=critical empties).",
     )
     ap.add_argument(
         "-e",
@@ -615,9 +616,12 @@ def main() -> int:
             total = 1
             pct = (filled / total * 100) if total > 0 else 0
 
-            # Format the row
-            cell = colorize_cell(row[1], empties_by_pos, slot, args.color) if row[1] else ""
-            print(f"{slot_name:<{pos_w}}  {filled}/{total:>{eff_w-2}}  {pct:>5.1f}%  {cell:>{col_w}}")
+            # Format the row with colors
+            cell = colorize_cell(row[1])
+            pct_color = colorize_percentage(pct)
+            eff_str = f"{pct_color}{filled}/{total}{Colors.RESET}"
+            pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
+            print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  {cell}")
 
         print("\nEmpty slots by position:")
         for pos in ["C", "LW", "RW", "D", "G"]:
@@ -744,8 +748,12 @@ def main() -> int:
                     total = 7
                     pct = (filled / total * 100) if total > 0 else 0
 
-                    colored_cells = [colorize_cell(cell, empties_by_pos, slot, args.color) if cell else "" for cell in cells]
-                    print(f"{slot_name:<{pos_w}}  {filled:>2}/{total:<2}  {pct:>5.1f}%  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
+                    # Format with colors
+                    colored_cells = [colorize_cell(cell) for cell in cells]
+                    pct_color = colorize_percentage(pct)
+                    eff_str = f"{pct_color}{filled:>2}/{total:<2}{Colors.RESET}"
+                    pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
+                    print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
 
         # Print aggregate stats
         if not args.export:
@@ -821,8 +829,12 @@ def main() -> int:
         total = total_days
         pct = (filled / total * 100) if total > 0 else 0
 
-        colored_cells = [colorize_cell(cell, empties_by_pos, slot, args.color) if cell else "" for cell in cells]
-        print(f"{slot_name:<{pos_w}}  {filled:>2}/{total:<2}  {pct:>5.1f}%  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
+        # Format with colors
+        colored_cells = [colorize_cell(cell) for cell in cells]
+        pct_color = colorize_percentage(pct)
+        eff_str = f"{pct_color}{filled:>2}/{total:<2}{Colors.RESET}"
+        pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
+        print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
 
     print("\nEmpty slots by position (lower is better):")
     for pos in ["C", "LW", "RW", "D", "G"]:

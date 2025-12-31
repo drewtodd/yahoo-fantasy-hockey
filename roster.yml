@@ -1,65 +1,83 @@
-# roster.yaml
 players:
-  - name: Nathan MacKinnon
-    team: COL
-    pos: [C]
-
-  - name: Dylan Larkin
-    team: DET
-    pos: [C]
-
-  - name: Jack Hughes
-    team: NJ
-    pos: [C, LW]
-
-  - name: Cutter Gauthier
-    team: ANA
-    pos: [LW]
-
-  - name: Jesper Bratt
-    team: NJ
-    pos: [LW, RW]
-
-  - name: Alex Tuch
-    team: BUF
-    pos: [LW, RW]
-
-  - name: Evan Bouchard
-    team: EDM
-    pos: [D]
-
-  - name: Josh Morrissey
-    team: WPG
-    pos: [D]
-
-  - name: Noah Dobson
-    team: MTL
-    pos: [D]
-
-  - name: Roman Josi
-    team: NSH
-    pos: [D]
-
-  - name: John Tavares
-    team: TOR
-    pos: [C]
-
-  - name: Carter Verhaeghe
-    team: FLA
-    pos: [LW]
-
-  - name: Brad Marchand
-    team: FLA
-    pos: [LW, RW]
-
-  - name: Elias Pettersson
-    team: VAN
-    pos: [C, LW]
-
-  - name: Sergei Bobrovsky
-    team: FLA
-    pos: [G]
-
-  - name: Joey Daccord
-    team: SEA
-    pos: [G]
+- name: Nathan MacKinnon
+  team: COL
+  pos:
+  - C
+- name: Dylan Larkin
+  team: DET
+  pos:
+  - C
+- name: Jack Hughes
+  team: NJ
+  pos:
+  - C
+  - LW
+- name: Cutter Gauthier
+  team: ANA
+  pos:
+  - LW
+- name: Jesper Bratt
+  team: NJ
+  pos:
+  - LW
+  - RW
+- name: Alex Tuch
+  team: BUF
+  pos:
+  - LW
+  - RW
+- name: Evan Bouchard
+  team: EDM
+  pos:
+  - D
+- name: Josh Morrissey
+  team: WPG
+  pos:
+  - D
+- name: Noah Dobson
+  team: MTL
+  pos:
+  - D
+- name: Roman Josi
+  team: NSH
+  pos:
+  - D
+- name: John Tavares
+  team: TOR
+  pos:
+  - C
+- name: Carter Verhaeghe
+  team: FLA
+  pos:
+  - LW
+- name: Brad Marchand
+  team: FLA
+  pos:
+  - LW
+  - RW
+- name: Elias Pettersson
+  team: VAN
+  pos:
+  - C
+  - LW
+- name: Sergei Bobrovsky
+  team: FLA
+  pos:
+  - G
+- name: Joey Daccord
+  team: SEA
+  pos:
+  - G
+slots:
+- C
+- C
+- LW
+- LW
+- RW
+- RW
+- D
+- D
+- D
+- D
+- G
+- G
