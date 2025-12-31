@@ -9,3 +9,7 @@ __pycache__/
 yahoo-developer-app-info.md
 .yahoo_cert.pem
 .yahoo_key.pem
+
+# Export files
+yfh-export-*.csv
+yfh-export-*.md
