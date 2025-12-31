@@ -198,6 +198,46 @@ def get_slot_names(slots: List[str]) -> List[str]:
     return slot_names
 
 
+def sort_slots_by_efficiency(slots: List[str], grid: List[List[str]], total_days: int) -> List[int]:
+    """
+    Sort slots by position type, then by efficiency (PCT) descending.
+
+    Within each position group (C, LW, RW, D, G), slots are sorted so that
+    the highest performing slot becomes #1, second highest becomes #2, etc.
+
+    Args:
+        slots: List of roster slots
+        grid: Grid data with slot performance
+        total_days: Total number of days in the analysis period
+
+    Returns:
+        List of indices representing the sorted order
+    """
+    # Calculate efficiency for each slot
+    slot_data = []
+    for s_i, slot in enumerate(slots):
+        cells = grid[s_i][1:]  # Skip position column
+        filled = sum(1 for cell in cells if cell == "X")
+        pct = (filled / total_days * 100) if total_days > 0 else 0
+        slot_data.append((s_i, slot, pct))
+
+    # Group by position type
+    from collections import defaultdict
+    pos_groups = defaultdict(list)
+    for s_i, slot, pct in slot_data:
+        pos_groups[slot].append((s_i, pct))
+
+    # Sort each group by PCT descending and build sorted order
+    sorted_indices = []
+    for pos in ["C", "LW", "RW", "D", "G"]:
+        if pos in pos_groups:
+            # Sort by PCT descending
+            sorted_group = sorted(pos_groups[pos], key=lambda x: x[1], reverse=True)
+            sorted_indices.extend([s_i for s_i, pct in sorted_group])
+
+    return sorted_indices
+
+
 def calculate_idle_players(players: List[Player], slots: List[str]) -> Dict[str, int]:
     """
     Calculate idle/surplus players by position.
@@ -552,23 +592,31 @@ def main() -> int:
                     print("✗ Failed to copy to clipboard (pbcopy/xclip not available)", file=sys.stderr)
             return 0
 
-        # Print single-day grid with EFF and PCT columns
-        slot_names = get_slot_names(SLOTS)
+        # Print single-day grid with EFF and PCT columns, sorted by efficiency
+        sorted_indices = sort_slots_by_efficiency(SLOTS, grid, 1)
+
         col_w = 4
-        pos_w = max(len(slot_name) for slot_name in slot_names)
+        pos_w = 3  # "LW1", "RW2", etc.
         eff_w = 3  # "1/1"
         pct_w = 6  # "100.0%"
 
         print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  {day_name[:3]:>{col_w}}")
 
-        for s_i, (row, slot_name) in enumerate(zip(grid, slot_names)):
+        # Renumber slots after sorting
+        pos_counts = {}
+        for s_i in sorted_indices:
+            row = grid[s_i]
+            slot = SLOTS[s_i]
+            pos_counts[slot] = pos_counts.get(slot, 0) + 1
+            slot_name = f"{slot}{pos_counts[slot]}"
+
             # Calculate efficiency for this slot
             filled = 1 if row[1] else 0
             total = 1
             pct = (filled / total * 100) if total > 0 else 0
 
             # Format the row
-            cell = colorize_cell(row[1], empties_by_pos, SLOTS[s_i], args.color) if row[1] else ""
+            cell = colorize_cell(row[1], empties_by_pos, slot, args.color) if row[1] else ""
             print(f"{slot_name:<{pos_w}}  {filled}/{total:>{eff_w-2}}  {pct:>5.1f}%  {cell:>{col_w}}")
 
         print("\nEmpty slots by position:")
@@ -669,27 +717,34 @@ def main() -> int:
                     else:
                         print("✗ Failed to copy to clipboard", file=sys.stderr)
             else:
-                # Print this week with EFF and PCT columns
+                # Print this week with EFF and PCT columns, sorted by efficiency
                 print(f"\n=== Week {week_num + 1}: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
 
-                slot_names = get_slot_names(SLOTS)
+                sorted_indices = sort_slots_by_efficiency(SLOTS, week_grid, 7)
+
                 col_w = 8
-                pos_w = max(len(slot_name) for slot_name in slot_names)
+                pos_w = 3  # "LW1", "RW2", etc.
                 eff_w = 5  # "11/14"
                 pct_w = 6  # "100.0%"
 
                 # Print header
                 print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
 
-                # Print rows with EFF, PCT, and optional colors
-                for s_i, (row, slot_name) in enumerate(zip(week_grid, slot_names)):
+                # Print rows with EFF, PCT, and optional colors, in sorted order
+                pos_counts = {}
+                for s_i in sorted_indices:
+                    row = week_grid[s_i]
+                    slot = SLOTS[s_i]
+                    pos_counts[slot] = pos_counts.get(slot, 0) + 1
+                    slot_name = f"{slot}{pos_counts[slot]}"
+
                     # Calculate efficiency for this slot across this week (7 days)
                     cells = row[1:]
                     filled = sum(1 for cell in cells if cell == "X")
                     total = 7
                     pct = (filled / total * 100) if total > 0 else 0
 
-                    colored_cells = [colorize_cell(cell, empties_by_pos, SLOTS[s_i], args.color) if cell else "" for cell in cells]
+                    colored_cells = [colorize_cell(cell, empties_by_pos, slot, args.color) if cell else "" for cell in cells]
                     print(f"{slot_name:<{pos_w}}  {filled:>2}/{total:<2}  {pct:>5.1f}%  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
 
         # Print aggregate stats
@@ -739,27 +794,34 @@ def main() -> int:
                 print("✗ Failed to copy to clipboard (pbcopy/xclip not available)", file=sys.stderr)
         return 0
 
-    # Print unified table with EFF and PCT columns
+    # Print unified table with EFF and PCT columns, sorted by efficiency
     print(f"\n{initial_week_start.isoformat()} → {end_date.isoformat()}\n")
 
-    slot_names = get_slot_names(SLOTS)
+    sorted_indices = sort_slots_by_efficiency(SLOTS, grid, total_days)
+
     col_w = 8  # Width for date columns like "M(12/29)"
-    pos_w = max(len(slot_name) for slot_name in slot_names)
+    pos_w = 3  # "LW1", "RW2", etc.
     eff_w = 5  # "11/14"
     pct_w = 6  # "100.0%"
 
     # Print header
     print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
 
-    # Print each row with EFF, PCT, and optional colors
-    for s_i, (row, slot_name) in enumerate(zip(grid, slot_names)):
+    # Print each row with EFF, PCT, and optional colors, in sorted order
+    pos_counts = {}
+    for s_i in sorted_indices:
+        row = grid[s_i]
+        slot = SLOTS[s_i]
+        pos_counts[slot] = pos_counts.get(slot, 0) + 1
+        slot_name = f"{slot}{pos_counts[slot]}"
+
         cells = row[1:]
         # Calculate efficiency for this slot across all days
         filled = sum(1 for cell in cells if cell == "X")
         total = total_days
         pct = (filled / total * 100) if total > 0 else 0
 
-        colored_cells = [colorize_cell(cell, empties_by_pos, SLOTS[s_i], args.color) if cell else "" for cell in cells]
+        colored_cells = [colorize_cell(cell, empties_by_pos, slot, args.color) if cell else "" for cell in cells]
         print(f"{slot_name:<{pos_w}}  {filled:>2}/{total:<2}  {pct:>5.1f}%  " + "  ".join(f"{c:>{col_w}}" for c in colored_cells))
 
     print("\nEmpty slots by position (lower is better):")
