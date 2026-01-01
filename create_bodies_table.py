@@ -454,6 +454,12 @@ def main() -> int:
         action="store_true",
         help="Fetch roster from Yahoo and save to roster.yml, then exit.",
     )
+    ap.add_argument(
+        "--compare-team",
+        type=str,
+        metavar="TEAM_ID",
+        help="Compare your roster efficiency against another team (forces single-week mode). Requires Yahoo API.",
+    )
     args = ap.parse_args()
 
     # Normalize export aliases
@@ -462,6 +468,17 @@ def main() -> int:
             args.export = "markdown"
         elif args.export == "cp":
             args.export = "clipboard"
+
+    # Validate comparison mode
+    if args.compare_team:
+        if args.local:
+            print("Error: --compare-team requires Yahoo API (cannot use with --local)", file=sys.stderr)
+            return 2
+        if args.day:
+            print("Error: --compare-team only works with week mode (cannot use with --day)", file=sys.stderr)
+            return 2
+        # Force single-week analysis in comparison mode
+        args.weeks = 1
 
     tz = gettz("America/Los_Angeles")
     today = dt.datetime.now(tz=tz).date()
@@ -502,6 +519,7 @@ def main() -> int:
     # Fetch roster (Yahoo by default, local if --local flag)
     use_local = args.local
     yahoo_failed = False
+    opponent_players: Optional[List[Player]] = None
 
     if not use_local:
         # Try Yahoo first (default behavior)
@@ -527,6 +545,20 @@ def main() -> int:
             ]
 
             print(f"✓ Fetched {len(players)} players from Yahoo")
+
+            # Fetch opponent roster if comparison mode is active
+            if args.compare_team:
+                print(f"Fetching opponent team {args.compare_team} roster...")
+                try:
+                    opponent_roster_data = client.fetch_team_roster(team_id=args.compare_team)
+                    opponent_players = [
+                        Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
+                        for p in opponent_roster_data
+                    ]
+                    print(f"✓ Fetched {len(opponent_players)} players from opponent team")
+                except Exception as e:
+                    print(f"Error fetching opponent roster: {e}", file=sys.stderr)
+                    return 2
 
         except ImportError:
             print("\n⚠ Yahoo client not available. Install required dependencies.", file=sys.stderr)
@@ -672,6 +704,152 @@ def main() -> int:
             for pos in ["C", "LW", "RW", "D", "G"]:
                 if pos in idle_by_pos:
                     print(f"  {pos}: {idle_by_pos[pos]}")
+
+        return 0
+
+    # Handle comparison mode (must be before regular week mode)
+    if args.compare_team and opponent_players:
+        # Determine the week to analyze
+        if args.date:
+            provided_date = dt.date.fromisoformat(args.date)
+            week_start = week_start_monday(provided_date)
+        else:
+            week_start = week_start_monday(today)
+
+        week_end = week_start + dt.timedelta(days=6)
+        week_dates = daterange(week_start, 7)
+
+        # Build games-per-player for both teams
+        your_p_games = build_player_game_matrix(players, week_start)
+        opp_p_games = build_player_game_matrix(opponent_players, week_start)
+
+        # Generate grids for both teams
+        your_grid: List[List[str]] = [[slot] + [""] * 7 for slot in SLOTS]
+        opp_grid: List[List[str]] = [[slot] + [""] * 7 for slot in SLOTS]
+
+        your_filled_by_pos = {k: 0 for k in set(SLOTS)}
+        opp_filled_by_pos = {k: 0 for k in set(SLOTS)}
+
+        # Process each day for both teams
+        for day_i, day_date in enumerate(week_dates):
+            # Your team
+            your_active = [p for p in players if day_date in your_p_games.get(p.name, set())]
+            your_assignment = solve_daily_assignment(your_active, SLOTS)
+            for s_i, slot in enumerate(SLOTS):
+                if s_i in your_assignment:
+                    your_grid[s_i][1 + day_i] = "X"
+                    your_filled_by_pos[slot] += 1
+
+            # Opponent team
+            opp_active = [p for p in opponent_players if day_date in opp_p_games.get(p.name, set())]
+            opp_assignment = solve_daily_assignment(opp_active, SLOTS)
+            for s_i, slot in enumerate(SLOTS):
+                if s_i in opp_assignment:
+                    opp_grid[s_i][1 + day_i] = "X"
+                    opp_filled_by_pos[slot] += 1
+
+        # Display both grids
+        day_abbrevs = ["M", "T", "W", "Th", "F", "Sa", "Su"]
+        if args.compact:
+            header = ["POS"] + day_abbrevs
+        else:
+            header = ["POS"] + [f"{abbr}({d.strftime('%m/%d')})" for abbr, d in zip(day_abbrevs, week_dates)]
+
+        # Column widths
+        pos_w = 3
+        eff_w = 5
+        pct_w = 6
+        col_w = 3 if args.compact else 8
+        header_align = '^' if args.compact else '>'
+
+        # Print YOUR TEAM grid
+        print(f"\n=== YOUR TEAM: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
+        sorted_indices = sort_slots_by_efficiency(SLOTS, your_grid, 7)
+        print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:{header_align}{col_w}}" for h in header[1:]))
+
+        pos_counts = {}
+        for s_i in sorted_indices:
+            row = your_grid[s_i]
+            slot = SLOTS[s_i]
+            pos_counts[slot] = pos_counts.get(slot, 0) + 1
+            slot_name = f"{slot}{pos_counts[slot]}"
+
+            cells = row[1:]
+            filled = sum(1 for cell in cells if cell == "X")
+            pct = (filled / 7 * 100) if 7 > 0 else 0
+
+            colored_cells = [pad_colored_cell(colorize_cell(cell), col_w) for cell in cells]
+            pct_color = colorize_percentage(pct)
+            eff_str = f"{pct_color}{filled:>2}/{7:<2}{Colors.RESET}"
+            pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
+            print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
+
+        # Print OPPONENT grid
+        print(f"\n=== OPPONENT (Team {args.compare_team}): {week_start.isoformat()} → {week_end.isoformat()} ===\n")
+        sorted_indices = sort_slots_by_efficiency(SLOTS, opp_grid, 7)
+        print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:{header_align}{col_w}}" for h in header[1:]))
+
+        pos_counts = {}
+        for s_i in sorted_indices:
+            row = opp_grid[s_i]
+            slot = SLOTS[s_i]
+            pos_counts[slot] = pos_counts.get(slot, 0) + 1
+            slot_name = f"{slot}{pos_counts[slot]}"
+
+            cells = row[1:]
+            filled = sum(1 for cell in cells if cell == "X")
+            pct = (filled / 7 * 100) if 7 > 0 else 0
+
+            colored_cells = [pad_colored_cell(colorize_cell(cell), col_w) for cell in cells]
+            pct_color = colorize_percentage(pct)
+            eff_str = f"{pct_color}{filled:>2}/{7:<2}{Colors.RESET}"
+            pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
+            print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
+
+        # Print comparison summary
+        print("\n=== Comparison Summary ===\n")
+
+        # Calculate overall stats
+        total_slots = len(SLOTS)
+        your_total_filled = sum(your_filled_by_pos.values())
+        opp_total_filled = sum(opp_filled_by_pos.values())
+        your_overall_pct = (your_total_filled / (total_slots * 7) * 100) if total_slots > 0 else 0
+        opp_overall_pct = (opp_total_filled / (total_slots * 7) * 100) if total_slots > 0 else 0
+
+        # Daily fills
+        your_daily_fills = []
+        opp_daily_fills = []
+        for day_i in range(7):
+            your_day_filled = sum(1 for s_i in range(len(SLOTS)) if your_grid[s_i][1 + day_i] == "X")
+            opp_day_filled = sum(1 for s_i in range(len(SLOTS)) if opp_grid[s_i][1 + day_i] == "X")
+            your_daily_fills.append(your_day_filled)
+            opp_daily_fills.append(opp_day_filled)
+
+        # Print comparison table
+        print(f"{'':20} {'YOUR TEAM':>12}  {'OPPONENT':>12}  {'DIFF':>8}")
+        print(f"{'─' * 20} {'─' * 12}  {'─' * 12}  {'─' * 8}")
+
+        # Overall stats
+        eff_diff = your_total_filled - opp_total_filled
+        eff_diff_str = f"{'+' if eff_diff >= 0 else ''}{eff_diff}"
+        eff_diff_color = Colors.GREEN if eff_diff > 0 else (Colors.RED if eff_diff < 0 else Colors.YELLOW)
+        print(f"{'EFF':20} {your_total_filled:>5}/{total_slots * 7:<6}  {opp_total_filled:>5}/{total_slots * 7:<6}  {eff_diff_color}{eff_diff_str:>8}{Colors.RESET}")
+
+        pct_diff = your_overall_pct - opp_overall_pct
+        pct_diff_str = f"{'+' if pct_diff >= 0 else ''}{pct_diff:.1f}%"
+        pct_diff_color = Colors.GREEN if pct_diff > 0 else (Colors.RED if pct_diff < 0 else Colors.YELLOW)
+        print(f"{'PCT':20} {your_overall_pct:>11.1f}%  {opp_overall_pct:>11.1f}%  {pct_diff_color}{pct_diff_str:>8}{Colors.RESET}")
+
+        # Daily breakdown
+        for day_i, abbr in enumerate(day_abbrevs):
+            day_date = week_dates[day_i]
+            day_label = f"{abbr} ({day_date.strftime('%m/%d')})"
+            your_filled = your_daily_fills[day_i]
+            opp_filled = opp_daily_fills[day_i]
+            diff = your_filled - opp_filled
+            diff_str = f"{'+' if diff >= 0 else ''}{diff}"
+            diff_color = Colors.GREEN if diff > 0 else (Colors.RED if diff < 0 else Colors.YELLOW)
+            print(f"{day_label:20} {your_filled:>12}  {opp_filled:>12}  {diff_color}{diff_str:>8}{Colors.RESET}")
 
         return 0
 
