@@ -466,6 +466,19 @@ def main() -> int:
         metavar=("DROP_PLAYER_ID", "ADD_PLAYER_ID"),
         help="Simulate swapping players (forces single-week mode). First ID is player to drop, second is player to add. Requires Yahoo API.",
     )
+    ap.add_argument(
+        "--recommend-add",
+        type=str,
+        metavar="DROP_PLAYER_ID",
+        help="Recommend free agent additions by simulating swaps with available players (forces single-week mode). Requires Yahoo API.",
+    )
+    ap.add_argument(
+        "--top",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Number of recommendations to display when using --recommend-add (default: 10).",
+    )
     args = ap.parse_args()
 
     # Normalize export aliases
@@ -497,7 +510,24 @@ def main() -> int:
         if args.day:
             print("Error: --player-swap only works with week mode (cannot use with --day)", file=sys.stderr)
             return 2
+        if args.recommend_add:
+            print("Error: Cannot use --player-swap and --recommend-add together", file=sys.stderr)
+            return 2
         # Force single-week analysis in swap mode
+        args.weeks = 1
+
+    # Validate recommend add mode
+    if args.recommend_add:
+        if args.local:
+            print("Error: --recommend-add requires Yahoo API (cannot use with --local)", file=sys.stderr)
+            return 2
+        if args.day:
+            print("Error: --recommend-add only works with week mode (cannot use with --day)", file=sys.stderr)
+            return 2
+        if args.compare_team:
+            print("Error: Cannot use --recommend-add and --compare-team together", file=sys.stderr)
+            return 2
+        # Force single-week analysis in recommendation mode
         args.weeks = 1
 
     tz = gettz("America/Los_Angeles")
@@ -541,6 +571,7 @@ def main() -> int:
     yahoo_failed = False
     opponent_players: Optional[List[Player]] = None
     swap_add_player: Optional[Player] = None
+    available_players: Optional[List[Dict]] = None
 
     if not use_local:
         # Try Yahoo first (default behavior)
@@ -595,6 +626,18 @@ def main() -> int:
                     print(f"✓ Fetched player to add: {swap_add_player.name} ({swap_add_player.team}, {'/'.join(swap_add_player.pos)})")
                 except Exception as e:
                     print(f"Error fetching player {add_player_id}: {e}", file=sys.stderr)
+                    return 2
+
+            # Fetch available players if recommendation mode is active
+            if args.recommend_add:
+                print("Fetching top 100 available free agents...")
+                try:
+                    available_players = client.fetch_available_players(count=100)
+                    # Filter out goalies
+                    available_players = [p for p in available_players if 'G' not in p['pos']]
+                    print(f"✓ Fetched {len(available_players)} available skaters (goalies filtered out)")
+                except Exception as e:
+                    print(f"Error fetching available players: {e}", file=sys.stderr)
                     return 2
 
         except ImportError:
@@ -1142,6 +1185,158 @@ def main() -> int:
             diff_str = f"{'+' if diff >= 0 else ''}{diff}"
             diff_color = Colors.GREEN if diff > 0 else (Colors.RED if diff < 0 else Colors.YELLOW)
             print(f"{day_label:20} {current_filled:>12}  {modified_filled:>12}  {diff_color}{diff_str:>8}{Colors.RESET}")
+
+        return 0
+
+    # Handle recommend add mode (must be before regular week mode)
+    if args.recommend_add and available_players:
+        drop_player_id = args.recommend_add
+
+        # Try to fetch the drop player details to get their name
+        try:
+            drop_player_data = client.fetch_player_details(drop_player_id)
+            drop_player_name = drop_player_data["name"]
+        except Exception as e:
+            print(f"Error fetching player {drop_player_id} details: {e}", file=sys.stderr)
+            return 2
+
+        # Find and remove the drop player from roster
+        drop_player = None
+        for p in players:
+            if p.name == drop_player_name:
+                drop_player = p
+                break
+
+        if not drop_player:
+            print(f"Error: Player '{drop_player_name}' not found in your roster", file=sys.stderr)
+            return 2
+
+        print(f"\nAnalyzing recommendations to replace: {drop_player.name} ({drop_player.team}, {'/'.join(drop_player.pos)})")
+
+        # Determine the week to analyze
+        if args.date:
+            provided_date = dt.date.fromisoformat(args.date)
+            week_start = week_start_monday(provided_date)
+        else:
+            week_start = week_start_monday(today)
+
+        week_end = week_start + dt.timedelta(days=6)
+        week_dates = daterange(week_start, 7)
+
+        print(f"Week: {week_start.isoformat()} → {week_end.isoformat()}\n")
+
+        # Build current roster game matrix
+        current_p_games = build_player_game_matrix(players, week_start)
+
+        # Calculate current roster efficiency
+        current_total_filled = 0
+        for day_date in week_dates:
+            current_active = [p for p in players if day_date in current_p_games.get(p.name, set())]
+            current_assignment = solve_daily_assignment(current_active, SLOTS)
+            current_total_filled += len(current_assignment)
+
+        # Run simulations for each available player
+        print(f"Simulating swaps with {len(available_players)} available players...")
+        recommendations = []
+
+        for i, avail_player_data in enumerate(available_players):
+            # Create Player object
+            avail_player = Player(
+                name=avail_player_data["name"],
+                team=avail_player_data["team"],
+                pos=tuple(avail_player_data["pos"])
+            )
+
+            # Create modified roster
+            modified_players = [p for p in players if p.name != drop_player_name]
+            modified_players.append(avail_player)
+
+            # Build modified roster game matrix
+            modified_p_games = build_player_game_matrix(modified_players, week_start)
+
+            # Calculate modified roster efficiency
+            modified_total_filled = 0
+            for day_date in week_dates:
+                modified_active = [p for p in modified_players if day_date in modified_p_games.get(p.name, set())]
+                modified_assignment = solve_daily_assignment(modified_active, SLOTS)
+                modified_total_filled += len(modified_assignment)
+
+            # Calculate efficiency gain
+            eff_gain = modified_total_filled - current_total_filled
+
+            # Get overall rank (OR) - lower is better
+            # Note: Yahoo API doesn't provide OR in player data from fetch_available_players
+            # We're fetching them sorted by OR, so we can use the index as a proxy
+            overall_rank_proxy = i + 1
+
+            # Calculate fantasy points per game
+            stats = avail_player_data.get("stats", {})
+            # Stat ID 0 is Games Played (GP)
+            # We need to identify fantasy points stat ID from Yahoo's stat mapping
+            # For now, we'll use a simplified approach - calculate from available stats
+            # This may need adjustment based on your league's stat configuration
+
+            # Get games played
+            games_played = float(stats.get("0", 0)) if "0" in stats else 0
+
+            # Calculate total fantasy points from available stats
+            # This is a simplified calculation - adjust based on your league scoring
+            fantasy_points = 0.0
+            for stat_id, value in stats.items():
+                try:
+                    fantasy_points += float(value)
+                except (ValueError, TypeError):
+                    pass
+
+            # Calculate per-game average
+            fpg = (fantasy_points / games_played) if games_played > 0 else 0.0
+
+            recommendations.append({
+                "player": avail_player,
+                "eff_gain": eff_gain,
+                "overall_rank_proxy": overall_rank_proxy,
+                "fpg": fpg,
+                "ownership_pct": avail_player_data.get("ownership_pct", 0.0),
+                "stats": stats
+            })
+
+            # Progress indicator
+            if (i + 1) % 10 == 0:
+                print(f"  Simulated {i + 1}/{len(available_players)} players...")
+
+        print(f"✓ Completed {len(available_players)} simulations\n")
+
+        # Sort recommendations by:
+        # 1. Efficiency gain (descending)
+        # 2. Overall rank proxy (ascending - lower is better)
+        # 3. Fantasy points per game (descending)
+        recommendations.sort(key=lambda r: (-r["eff_gain"], r["overall_rank_proxy"], -r["fpg"]))
+
+        # Display top N recommendations
+        top_n = min(args.top, len(recommendations))
+        print(f"=== Top {top_n} Free Agent Recommendations ===\n")
+
+        # Table header
+        print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<10} {'EFF':>5} {'OR#':>5} {'FPG':>6} {'OWN%':>6}")
+        print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 10} {'─' * 5} {'─' * 5} {'─' * 6} {'─' * 6}")
+
+        for rank, rec in enumerate(recommendations[:top_n], 1):
+            player = rec["player"]
+            eff_gain = rec["eff_gain"]
+            or_proxy = rec["overall_rank_proxy"]
+            fpg = rec["fpg"]
+            own_pct = rec["ownership_pct"]
+
+            # Color code efficiency gain
+            if eff_gain > 0:
+                eff_str = f"{Colors.GREEN}+{eff_gain}{Colors.RESET}"
+            elif eff_gain < 0:
+                eff_str = f"{Colors.RED}{eff_gain}{Colors.RESET}"
+            else:
+                eff_str = f"{Colors.YELLOW}{eff_gain}{Colors.RESET}"
+
+            pos_str = '/'.join(player.pos)
+            print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_str:<10} {eff_str:>11} {or_proxy:>5} {fpg:>6.2f} {own_pct:>5.1f}%")
 
         return 0
 

@@ -485,3 +485,137 @@ class YahooClient:
 
         except (KeyError, IndexError, TypeError, AttributeError) as e:
             raise RuntimeError(f"Failed to fetch player {player_id} from Yahoo API: {e}")
+
+    def fetch_available_players(
+        self,
+        league_id: Optional[str] = None,
+        count: int = 100,
+        start: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Fetch available free agents from Yahoo Fantasy API.
+
+        Args:
+            league_id: League ID (defaults to config.league_id)
+            count: Number of players to fetch (default 100)
+            start: Starting index for pagination (default 0)
+
+        Returns:
+            List of player dictionaries with name, team, positions, player_id,
+            ownership percentage, and stats
+        """
+        league_id = league_id or config.league_id
+
+        if not league_id:
+            raise ValueError("League ID must be provided")
+
+        # Fetch free agents sorted by overall rank with stats and ownership
+        endpoint = (
+            f"league/nhl.l.{league_id}/players;"
+            f"status=FA;"
+            f"sort=OR;"
+            f"count={count};"
+            f"start={start};"
+            f"out=percent_owned,stats"
+        )
+
+        data = self._api_request(endpoint)
+
+        try:
+            fantasy_content = data["fantasy_content"]
+            league = fantasy_content["league"]
+
+            # Find players data in league array
+            players_data = None
+            for item in league:
+                if isinstance(item, dict) and "players" in item:
+                    players_data = item["players"]
+                    break
+
+            if not players_data:
+                return []
+
+            players = []
+            # Get player count
+            count_val = players_data.get("count", 0)
+
+            for i in range(count_val):
+                key = str(i)
+                if key not in players_data:
+                    continue
+
+                player_wrapper = players_data[key]["player"]
+
+                # player_wrapper is an array with 3 elements:
+                # [0] = array of player attribute objects
+                # [1] = percent_owned object
+                # [2] = player_stats/player_points object
+
+                player_id = None
+                name = None
+                team_abbr = None
+                positions = []
+                ownership_pct = 0.0
+                stats_dict = {}
+
+                # Parse player attributes from first array element
+                if len(player_wrapper) > 0 and isinstance(player_wrapper[0], list):
+                    for item in player_wrapper[0]:
+                        if not isinstance(item, dict):
+                            continue
+
+                        # Extract player ID
+                        if "player_id" in item:
+                            player_id = item["player_id"]
+
+                        # Extract name
+                        if "name" in item:
+                            name = item["name"]["full"]
+
+                        # Extract team
+                        if "editorial_team_abbr" in item:
+                            team_abbr = item["editorial_team_abbr"]
+
+                        # Extract positions
+                        if "eligible_positions" in item:
+                            positions = [p["position"] for p in item["eligible_positions"]]
+                            # Filter out utility positions
+                            positions = [p for p in positions if p not in ("Util", "BN", "IR", "IR+", "NA")]
+
+                # Parse ownership from second array element
+                if len(player_wrapper) > 1 and isinstance(player_wrapper[1], dict):
+                    pct_data = player_wrapper[1].get("percent_owned", [])
+                    if isinstance(pct_data, list):
+                        # Find the value object in the array
+                        for pct_obj in pct_data:
+                            if isinstance(pct_obj, dict) and "value" in pct_obj:
+                                ownership_pct = float(pct_obj["value"])
+                                break
+
+                # Parse stats from third array element
+                if len(player_wrapper) > 2 and isinstance(player_wrapper[2], dict):
+                    player_stats = player_wrapper[2].get("player_stats", {})
+                    if "stats" in player_stats:
+                        stats_list = player_stats["stats"]
+                        # Parse stats into dictionary
+                        for stat in stats_list:
+                            if "stat" in stat:
+                                stat_obj = stat["stat"]
+                                stat_id = stat_obj.get("stat_id")
+                                value = stat_obj.get("value")
+                                if stat_id and value:
+                                    stats_dict[stat_id] = value
+
+                if player_id and name and team_abbr:
+                    players.append({
+                        "player_id": player_id,
+                        "name": name,
+                        "team": team_abbr,
+                        "pos": positions,
+                        "ownership_pct": ownership_pct,
+                        "stats": stats_dict
+                    })
+
+            return players
+
+        except (KeyError, IndexError, TypeError, AttributeError) as e:
+            raise RuntimeError(f"Failed to fetch available players from Yahoo API: {e}")
