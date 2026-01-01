@@ -84,18 +84,18 @@ Implementation Notes
 Enable head-to-head roster efficiency comparison to identify competitive advantages and gaps that need immediate attention versus league-common weaknesses.
 
 Features
-	•	[ ] Compare your roster efficiency against a specific opponent for the upcoming matchup week
-	•	[ ] Team specification via team ID: --compare-team <team_id>
-	•	[ ] Force single-week analysis when comparison mode is active (ignore --weeks)
-	•	[ ] Display separate grids for both teams (similar to --separate-weeks mode)
-	•	[ ] Side-by-side comparison in Aggregate Stats section showing:
-		•	[ ] Overall EFF (filled/total) for both teams
-		•	[ ] Overall PCT for both teams
-		•	[ ] Daily breakdown (M, T, W, Th, F, Sa, Su) comparing filled slots per day
-		•	[ ] Visual indicators: green when ahead, red when behind, yellow when tied
-		•	[ ] Differential values (e.g., "+5" or "-3") showing your advantage/deficit
-	•	[ ] Fetch opponent roster via Yahoo API using team ID
-	•	[ ] Support comparison with local roster files for testing/offline use
+	•	[x] Compare your roster efficiency against a specific opponent for the upcoming matchup week
+	•	[x] Team specification via team ID: --compare-team <team_id>
+	•	[x] Force single-week analysis when comparison mode is active (ignore --weeks)
+	•	[x] Display separate grids for both teams (similar to --separate-weeks mode)
+	•	[x] Side-by-side comparison in Aggregate Stats section showing:
+		•	[x] Overall EFF (filled/total) for both teams
+		•	[x] Overall PCT for both teams
+		•	[x] Daily breakdown (M, T, W, Th, F, Sa, Su) comparing filled slots per day
+		•	[x] Visual indicators: green when ahead, red when behind, yellow when tied
+		•	[x] Differential values (e.g., "+5" or "-3") showing your advantage/deficit
+	•	[x] Fetch opponent roster via Yahoo API using team ID
+	•	[ ] Support comparison with local roster files for testing/offline use (not needed - requires Yahoo API)
 
 Implementation Notes
 	•	Reuse existing grid generation and optimization logic for opponent's roster
