@@ -425,3 +425,63 @@ class YahooClient:
 
         except (KeyError, IndexError, TypeError) as e:
             raise RuntimeError(f"Failed to parse league settings from Yahoo API: {e}")
+
+    def fetch_player_details(self, player_id: str, league_id: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch player details by Yahoo player ID.
+
+        Args:
+            player_id: Yahoo player ID (e.g., "5479")
+            league_id: League ID (defaults to config.league_id)
+
+        Returns:
+            Dictionary with player name, team, and positions
+        """
+        league_id = league_id or config.league_id
+
+        if not league_id:
+            raise ValueError("League ID must be provided")
+
+        # Yahoo player key format: nhl.p.{player_id}
+        endpoint = f"league/nhl.l.{league_id}/players;player_keys=nhl.p.{player_id}"
+
+        data = self._api_request(endpoint)
+
+        try:
+            fantasy_content = data["fantasy_content"]
+            league = fantasy_content["league"]
+
+            # Find players data in league array
+            players_data = None
+            for item in league:
+                if isinstance(item, dict) and "players" in item:
+                    players_data = item["players"]
+                    break
+
+            if not players_data:
+                raise RuntimeError(f"Player {player_id} not found in league")
+
+            # Get first player (should be only one)
+            player_data = players_data["0"]["player"][0]
+
+            name_obj = next((p for p in player_data if isinstance(p, dict) and "name" in p), None)
+            team_obj = next((p for p in player_data if isinstance(p, dict) and "editorial_team_abbr" in p), None)
+            pos_obj = next((p for p in player_data if isinstance(p, dict) and "eligible_positions" in p), None)
+
+            if not (name_obj and team_obj and pos_obj):
+                raise RuntimeError(f"Incomplete player data for player {player_id}")
+
+            full_name = name_obj["name"]["full"]
+            team_abbr = team_obj["editorial_team_abbr"]
+            positions = [p["position"] for p in pos_obj["eligible_positions"]]
+
+            # Filter out utility positions and bench
+            positions = [p for p in positions if p not in ("Util", "BN", "IR", "IR+", "NA")]
+
+            return {
+                "name": full_name,
+                "team": team_abbr,
+                "pos": positions,
+            }
+
+        except (KeyError, IndexError, TypeError, AttributeError) as e:
+            raise RuntimeError(f"Failed to fetch player {player_id} from Yahoo API: {e}")

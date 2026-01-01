@@ -460,6 +460,12 @@ def main() -> int:
         metavar="TEAM_ID",
         help="Compare your roster efficiency against another team (forces single-week mode). Requires Yahoo API.",
     )
+    ap.add_argument(
+        "--player-swap",
+        nargs=2,
+        metavar=("DROP_PLAYER_ID", "ADD_PLAYER_ID"),
+        help="Simulate swapping players (forces single-week mode). First ID is player to drop, second is player to add. Requires Yahoo API.",
+    )
     args = ap.parse_args()
 
     # Normalize export aliases
@@ -477,7 +483,21 @@ def main() -> int:
         if args.day:
             print("Error: --compare-team only works with week mode (cannot use with --day)", file=sys.stderr)
             return 2
+        if args.player_swap:
+            print("Error: Cannot use --compare-team and --player-swap together", file=sys.stderr)
+            return 2
         # Force single-week analysis in comparison mode
+        args.weeks = 1
+
+    # Validate player swap mode
+    if args.player_swap:
+        if args.local:
+            print("Error: --player-swap requires Yahoo API (cannot use with --local)", file=sys.stderr)
+            return 2
+        if args.day:
+            print("Error: --player-swap only works with week mode (cannot use with --day)", file=sys.stderr)
+            return 2
+        # Force single-week analysis in swap mode
         args.weeks = 1
 
     tz = gettz("America/Los_Angeles")
@@ -520,6 +540,7 @@ def main() -> int:
     use_local = args.local
     yahoo_failed = False
     opponent_players: Optional[List[Player]] = None
+    swap_add_player: Optional[Player] = None
 
     if not use_local:
         # Try Yahoo first (default behavior)
@@ -558,6 +579,22 @@ def main() -> int:
                     print(f"✓ Fetched {len(opponent_players)} players from opponent team")
                 except Exception as e:
                     print(f"Error fetching opponent roster: {e}", file=sys.stderr)
+                    return 2
+
+            # Fetch player details if swap mode is active
+            if args.player_swap:
+                drop_player_id, add_player_id = args.player_swap
+                print(f"Fetching player details for swap (drop: {drop_player_id}, add: {add_player_id})...")
+                try:
+                    add_player_data = client.fetch_player_details(add_player_id)
+                    swap_add_player = Player(
+                        name=add_player_data["name"],
+                        team=add_player_data["team"],
+                        pos=tuple(add_player_data["pos"])
+                    )
+                    print(f"✓ Fetched player to add: {swap_add_player.name} ({swap_add_player.team}, {'/'.join(swap_add_player.pos)})")
+                except Exception as e:
+                    print(f"Error fetching player {add_player_id}: {e}", file=sys.stderr)
                     return 2
 
         except ImportError:
@@ -761,6 +798,7 @@ def main() -> int:
         pct_w = 6
         col_w = 3 if args.compact else 8
         header_align = '^' if args.compact else '>'
+        total_slots = len(SLOTS)
 
         # Calculate daily fills for both teams (needed for summary rows)
         your_daily_fills = []
@@ -886,6 +924,224 @@ def main() -> int:
             diff_str = f"{'+' if diff >= 0 else ''}{diff}"
             diff_color = Colors.GREEN if diff > 0 else (Colors.RED if diff < 0 else Colors.YELLOW)
             print(f"{day_label:20} {your_filled:>12}  {opp_filled:>12}  {diff_color}{diff_str:>8}{Colors.RESET}")
+
+        return 0
+
+    # Handle player swap mode (must be before regular week mode)
+    if args.player_swap and swap_add_player:
+        drop_player_id, add_player_id = args.player_swap
+
+        # Find the player to drop by matching Yahoo player ID from roster
+        # Note: Yahoo roster data doesn't include player IDs, so we'll match by name search
+        # For now, we'll use a simpler approach: let the user know which player to identify
+        print("\nCurrent roster players:")
+        for i, p in enumerate(players, 1):
+            print(f"  {i}. {p.name} ({p.team}, {'/'.join(p.pos)})")
+
+        # Try to fetch the drop player details to get their name
+        try:
+            drop_player_data = client.fetch_player_details(drop_player_id)
+            drop_player_name = drop_player_data["name"]
+        except Exception as e:
+            print(f"Error fetching player {drop_player_id} details: {e}", file=sys.stderr)
+            return 2
+
+        # Find and remove the drop player from roster
+        drop_player = None
+        for p in players:
+            if p.name == drop_player_name:
+                drop_player = p
+                break
+
+        if not drop_player:
+            print(f"Error: Player '{drop_player_name}' not found in your roster", file=sys.stderr)
+            return 2
+
+        print(f"→ Dropping: {drop_player.name} ({drop_player.team}, {'/'.join(drop_player.pos)})")
+        print(f"→ Adding: {swap_add_player.name} ({swap_add_player.team}, {'/'.join(swap_add_player.pos)})")
+
+        # Create modified roster
+        modified_players = [p for p in players if p.name != drop_player_name]
+        modified_players.append(swap_add_player)
+
+        # Determine the week to analyze
+        if args.date:
+            provided_date = dt.date.fromisoformat(args.date)
+            week_start = week_start_monday(provided_date)
+        else:
+            week_start = week_start_monday(today)
+
+        week_end = week_start + dt.timedelta(days=6)
+        week_dates = daterange(week_start, 7)
+
+        # Build games-per-player for both rosters
+        current_p_games = build_player_game_matrix(players, week_start)
+        modified_p_games = build_player_game_matrix(modified_players, week_start)
+
+        # Generate grids for both rosters
+        current_grid: List[List[str]] = [[slot] + [""] * 7 for slot in SLOTS]
+        modified_grid: List[List[str]] = [[slot] + [""] * 7 for slot in SLOTS]
+
+        current_filled_by_pos = {k: 0 for k in set(SLOTS)}
+        modified_filled_by_pos = {k: 0 for k in set(SLOTS)}
+
+        # Process each day for both rosters
+        for day_i, day_date in enumerate(week_dates):
+            # Current roster
+            current_active = [p for p in players if day_date in current_p_games.get(p.name, set())]
+            current_assignment = solve_daily_assignment(current_active, SLOTS)
+            for s_i, slot in enumerate(SLOTS):
+                if s_i in current_assignment:
+                    current_grid[s_i][1 + day_i] = "X"
+                    current_filled_by_pos[slot] += 1
+
+            # Modified roster
+            modified_active = [p for p in modified_players if day_date in modified_p_games.get(p.name, set())]
+            modified_assignment = solve_daily_assignment(modified_active, SLOTS)
+            for s_i, slot in enumerate(SLOTS):
+                if s_i in modified_assignment:
+                    modified_grid[s_i][1 + day_i] = "X"
+                    modified_filled_by_pos[slot] += 1
+
+        # Display both grids
+        day_abbrevs = ["M", "T", "W", "Th", "F", "Sa", "Su"]
+        if args.compact:
+            header = ["POS"] + day_abbrevs
+        else:
+            header = ["POS"] + [f"{abbr}({d.strftime('%m/%d')})" for abbr, d in zip(day_abbrevs, week_dates)]
+
+        # Column widths
+        pos_w = 3
+        eff_w = 5
+        pct_w = 6
+        col_w = 3 if args.compact else 8
+        header_align = '^' if args.compact else '>'
+        total_slots = len(SLOTS)
+
+        # Calculate daily fills for both rosters (needed for summary rows)
+        current_daily_fills = []
+        modified_daily_fills = []
+        for day_i in range(7):
+            current_day_filled = sum(1 for s_i in range(len(SLOTS)) if current_grid[s_i][1 + day_i] == "X")
+            modified_day_filled = sum(1 for s_i in range(len(SLOTS)) if modified_grid[s_i][1 + day_i] == "X")
+            current_daily_fills.append(current_day_filled)
+            modified_daily_fills.append(modified_day_filled)
+
+        # Print CURRENT ROSTER grid
+        print(f"\n=== CURRENT ROSTER: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
+        sorted_indices = sort_slots_by_efficiency(SLOTS, current_grid, 7)
+        print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:{header_align}{col_w}}" for h in header[1:]))
+
+        pos_counts = {}
+        for s_i in sorted_indices:
+            row = current_grid[s_i]
+            slot = SLOTS[s_i]
+            pos_counts[slot] = pos_counts.get(slot, 0) + 1
+            slot_name = f"{slot}{pos_counts[slot]}"
+
+            cells = row[1:]
+            filled = sum(1 for cell in cells if cell == "X")
+            pct = (filled / 7 * 100) if 7 > 0 else 0
+
+            colored_cells = [pad_colored_cell(colorize_cell(cell), col_w) for cell in cells]
+            pct_color = colorize_percentage(pct)
+            eff_str = f"{pct_color}{filled:>2}/{7:<2}{Colors.RESET}"
+            pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
+            print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
+
+        # Add summary row for CURRENT ROSTER
+        current_week_total_filled = sum(current_daily_fills)
+        current_week_total_slots = total_slots * 7
+        current_week_pct = (current_week_total_filled / current_week_total_slots * 100) if current_week_total_slots > 0 else 0
+        current_week_color = colorize_percentage(current_week_pct)
+        current_week_eff_str = f"{current_week_color}{current_week_total_filled:>2}/{current_week_total_slots:<2}{Colors.RESET}"
+        current_week_pct_str = f"{current_week_color}{current_week_pct:5.1f}%{Colors.RESET}"
+
+        current_daily_cells = []
+        for day_filled in current_daily_fills:
+            day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
+            day_color = colorize_percentage(day_pct)
+            day_str = f"{day_color}{day_filled}{Colors.RESET}"
+            current_daily_cells.append(pad_colored_cell(day_str, col_w))
+
+        print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(7)]))
+        print(f"{'TOT':<{pos_w}}  {current_week_eff_str}  {current_week_pct_str}  " + "  ".join(current_daily_cells))
+
+        # Print WITH SWAP grid
+        print(f"\n=== WITH SWAP: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
+        sorted_indices = sort_slots_by_efficiency(SLOTS, modified_grid, 7)
+        print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:{header_align}{col_w}}" for h in header[1:]))
+
+        pos_counts = {}
+        for s_i in sorted_indices:
+            row = modified_grid[s_i]
+            slot = SLOTS[s_i]
+            pos_counts[slot] = pos_counts.get(slot, 0) + 1
+            slot_name = f"{slot}{pos_counts[slot]}"
+
+            cells = row[1:]
+            filled = sum(1 for cell in cells if cell == "X")
+            pct = (filled / 7 * 100) if 7 > 0 else 0
+
+            colored_cells = [pad_colored_cell(colorize_cell(cell), col_w) for cell in cells]
+            pct_color = colorize_percentage(pct)
+            eff_str = f"{pct_color}{filled:>2}/{7:<2}{Colors.RESET}"
+            pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
+            print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
+
+        # Add summary row for WITH SWAP
+        modified_week_total_filled = sum(modified_daily_fills)
+        modified_week_total_slots = total_slots * 7
+        modified_week_pct = (modified_week_total_filled / modified_week_total_slots * 100) if modified_week_total_slots > 0 else 0
+        modified_week_color = colorize_percentage(modified_week_pct)
+        modified_week_eff_str = f"{modified_week_color}{modified_week_total_filled:>2}/{modified_week_total_slots:<2}{Colors.RESET}"
+        modified_week_pct_str = f"{modified_week_color}{modified_week_pct:5.1f}%{Colors.RESET}"
+
+        modified_daily_cells = []
+        for day_filled in modified_daily_fills:
+            day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
+            day_color = colorize_percentage(day_pct)
+            day_str = f"{day_color}{day_filled}{Colors.RESET}"
+            modified_daily_cells.append(pad_colored_cell(day_str, col_w))
+
+        print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(7)]))
+        print(f"{'TOT':<{pos_w}}  {modified_week_eff_str}  {modified_week_pct_str}  " + "  ".join(modified_daily_cells))
+
+        # Print comparison summary
+        print(f"\n=== Swap Impact Summary (Drop {drop_player.name}, Add {swap_add_player.name}) ===\n")
+
+        # Calculate overall stats
+        total_slots = len(SLOTS)
+        current_total_filled = sum(current_filled_by_pos.values())
+        modified_total_filled = sum(modified_filled_by_pos.values())
+        current_overall_pct = (current_total_filled / (total_slots * 7) * 100) if total_slots > 0 else 0
+        modified_overall_pct = (modified_total_filled / (total_slots * 7) * 100) if total_slots > 0 else 0
+
+        # Print comparison table
+        print(f"{'':20} {'CURRENT':>12}  {'WITH SWAP':>12}  {'DIFF':>8}")
+        print(f"{'─' * 20} {'─' * 12}  {'─' * 12}  {'─' * 8}")
+
+        # Overall stats
+        eff_diff = modified_total_filled - current_total_filled
+        eff_diff_str = f"{'+' if eff_diff >= 0 else ''}{eff_diff}"
+        eff_diff_color = Colors.GREEN if eff_diff > 0 else (Colors.RED if eff_diff < 0 else Colors.YELLOW)
+        print(f"{'EFF':20} {current_total_filled:>5}/{total_slots * 7:<6}  {modified_total_filled:>5}/{total_slots * 7:<6}  {eff_diff_color}{eff_diff_str:>8}{Colors.RESET}")
+
+        pct_diff = modified_overall_pct - current_overall_pct
+        pct_diff_str = f"{'+' if pct_diff >= 0 else ''}{pct_diff:.1f}%"
+        pct_diff_color = Colors.GREEN if pct_diff > 0 else (Colors.RED if pct_diff < 0 else Colors.YELLOW)
+        print(f"{'PCT':20} {current_overall_pct:>11.1f}%  {modified_overall_pct:>11.1f}%  {pct_diff_color}{pct_diff_str:>8}{Colors.RESET}")
+
+        # Daily breakdown
+        for day_i, abbr in enumerate(day_abbrevs):
+            day_date = week_dates[day_i]
+            day_label = f"{abbr} ({day_date.strftime('%m/%d')})"
+            current_filled = current_daily_fills[day_i]
+            modified_filled = modified_daily_fills[day_i]
+            diff = modified_filled - current_filled
+            diff_str = f"{'+' if diff >= 0 else ''}{diff}"
+            diff_color = Colors.GREEN if diff > 0 else (Colors.RED if diff < 0 else Colors.YELLOW)
+            print(f"{day_label:20} {current_filled:>12}  {modified_filled:>12}  {diff_color}{diff_str:>8}{Colors.RESET}")
 
         return 0
 
