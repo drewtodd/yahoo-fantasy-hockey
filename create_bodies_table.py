@@ -45,6 +45,11 @@ YAHOO_TO_NHL_TRI = {
 
 NHL_BASE = "https://api-web.nhle.com/v1"
 
+# ---------- NHL Schedule Cache ----------
+# Cache team schedules to avoid redundant API calls during bulk simulations
+# Key: (team_tri, week_start_isoformat), Value: Set[dt.date]
+_nhl_schedule_cache: Dict[Tuple[str, str], Set[dt.date]] = {}
+
 # ---------- ANSI Color codes ----------
 class Colors:
     GREEN = "\033[92m"
@@ -79,7 +84,15 @@ def fetch_team_week_games(team_tri: str, week_start: dt.date) -> Set[dt.date]:
     """
     Returns set of game dates (local date as provided by schedule; we only care about date).
     Endpoint example: /v1/club-schedule/ari/week/2023-09-30  [oai_citation:4‡Home Assistant Community](https://community.home-assistant.io/t/nhl-api-custom-component-track-your-favorite-hockey-team-in-home-assistant/140428?page=9&utm_source=chatgpt.com)
+
+    Uses global cache to avoid redundant API calls during bulk simulations.
     """
+    # Check cache first
+    cache_key = (team_tri, week_start.isoformat())
+    if cache_key in _nhl_schedule_cache:
+        return _nhl_schedule_cache[cache_key]
+
+    # Fetch from API if not cached
     url = f"{NHL_BASE}/club-schedule/{team_tri}/week/{week_start.isoformat()}"
     r = requests.get(url, timeout=20)
     r.raise_for_status()
@@ -107,6 +120,8 @@ def fetch_team_week_games(team_tri: str, week_start: dt.date) -> Set[dt.date]:
             except ValueError:
                 continue
 
+    # Cache the result before returning
+    _nhl_schedule_cache[cache_key] = game_dates
     return game_dates
 
 
