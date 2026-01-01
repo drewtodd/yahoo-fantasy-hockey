@@ -771,7 +771,7 @@ def main() -> int:
                 pos_w = 3  # "LW1", "RW2", etc.
                 eff_w = 5  # "11/14"
                 pct_w = 6  # "100.0%"
-                col_w = 2 if args.compact else 8  # Compact: "M", Full: "M(12/29)"
+                col_w = 3 if args.compact else 8  # Compact: "M", Full: "M(12/29)"
 
                 # Print header (center-align in compact mode for better visual balance)
                 header_align = '^' if args.compact else '>'
@@ -818,7 +818,7 @@ def main() -> int:
                 for day_filled in daily_fills:
                     day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
                     day_color = colorize_percentage(day_pct)
-                    day_str = f"{day_color}{day_filled:>2}{Colors.RESET}"
+                    day_str = f"{day_color}{day_filled}{Colors.RESET}"
                     daily_cells.append(pad_colored_cell(day_str, col_w))
 
                 print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(7)]))
@@ -886,7 +886,7 @@ def main() -> int:
     pos_w = 3  # "LW1", "RW2", etc.
     eff_w = 5  # "11/14"
     pct_w = 6  # "100.0%"
-    col_w = 2 if args.compact else 8  # Compact: "M", Full: "M(12/29)"
+    col_w = 3 if args.compact else 8  # Compact: "M", Full: "M(12/29)"
 
     # Print header (center-align in compact mode for better visual balance)
     header_align = '^' if args.compact else '>'
@@ -933,7 +933,7 @@ def main() -> int:
     for day_filled in daily_fills:
         day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
         day_color = colorize_percentage(day_pct)
-        day_str = f"{day_color}{day_filled:>2}{Colors.RESET}"
+        day_str = f"{day_color}{day_filled}{Colors.RESET}"
         daily_cells.append(pad_colored_cell(day_str, col_w))
 
     print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(total_days)]))
