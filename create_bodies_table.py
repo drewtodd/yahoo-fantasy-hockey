@@ -762,6 +762,15 @@ def main() -> int:
         col_w = 3 if args.compact else 8
         header_align = '^' if args.compact else '>'
 
+        # Calculate daily fills for both teams (needed for summary rows)
+        your_daily_fills = []
+        opp_daily_fills = []
+        for day_i in range(7):
+            your_day_filled = sum(1 for s_i in range(len(SLOTS)) if your_grid[s_i][1 + day_i] == "X")
+            opp_day_filled = sum(1 for s_i in range(len(SLOTS)) if opp_grid[s_i][1 + day_i] == "X")
+            your_daily_fills.append(your_day_filled)
+            opp_daily_fills.append(opp_day_filled)
+
         # Print YOUR TEAM grid
         print(f"\n=== YOUR TEAM: {week_start.isoformat()} → {week_end.isoformat()} ===\n")
         sorted_indices = sort_slots_by_efficiency(SLOTS, your_grid, 7)
@@ -783,6 +792,24 @@ def main() -> int:
             eff_str = f"{pct_color}{filled:>2}/{7:<2}{Colors.RESET}"
             pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
             print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
+
+        # Add summary row for YOUR TEAM
+        your_week_total_filled = sum(your_daily_fills)
+        your_week_total_slots = total_slots * 7
+        your_week_pct = (your_week_total_filled / your_week_total_slots * 100) if your_week_total_slots > 0 else 0
+        your_week_color = colorize_percentage(your_week_pct)
+        your_week_eff_str = f"{your_week_color}{your_week_total_filled:>2}/{your_week_total_slots:<2}{Colors.RESET}"
+        your_week_pct_str = f"{your_week_color}{your_week_pct:5.1f}%{Colors.RESET}"
+
+        your_daily_cells = []
+        for day_filled in your_daily_fills:
+            day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
+            day_color = colorize_percentage(day_pct)
+            day_str = f"{day_color}{day_filled}{Colors.RESET}"
+            your_daily_cells.append(pad_colored_cell(day_str, col_w))
+
+        print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(7)]))
+        print(f"{'TOT':<{pos_w}}  {your_week_eff_str}  {your_week_pct_str}  " + "  ".join(your_daily_cells))
 
         # Print OPPONENT grid
         print(f"\n=== OPPONENT (Team {args.compare_team}): {week_start.isoformat()} → {week_end.isoformat()} ===\n")
@@ -806,6 +833,24 @@ def main() -> int:
             pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
             print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
 
+        # Add summary row for OPPONENT
+        opp_week_total_filled = sum(opp_daily_fills)
+        opp_week_total_slots = total_slots * 7
+        opp_week_pct = (opp_week_total_filled / opp_week_total_slots * 100) if opp_week_total_slots > 0 else 0
+        opp_week_color = colorize_percentage(opp_week_pct)
+        opp_week_eff_str = f"{opp_week_color}{opp_week_total_filled:>2}/{opp_week_total_slots:<2}{Colors.RESET}"
+        opp_week_pct_str = f"{opp_week_color}{opp_week_pct:5.1f}%{Colors.RESET}"
+
+        opp_daily_cells = []
+        for day_filled in opp_daily_fills:
+            day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
+            day_color = colorize_percentage(day_pct)
+            day_str = f"{day_color}{day_filled}{Colors.RESET}"
+            opp_daily_cells.append(pad_colored_cell(day_str, col_w))
+
+        print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(7)]))
+        print(f"{'TOT':<{pos_w}}  {opp_week_eff_str}  {opp_week_pct_str}  " + "  ".join(opp_daily_cells))
+
         # Print comparison summary
         print("\n=== Comparison Summary ===\n")
 
@@ -815,15 +860,6 @@ def main() -> int:
         opp_total_filled = sum(opp_filled_by_pos.values())
         your_overall_pct = (your_total_filled / (total_slots * 7) * 100) if total_slots > 0 else 0
         opp_overall_pct = (opp_total_filled / (total_slots * 7) * 100) if total_slots > 0 else 0
-
-        # Daily fills
-        your_daily_fills = []
-        opp_daily_fills = []
-        for day_i in range(7):
-            your_day_filled = sum(1 for s_i in range(len(SLOTS)) if your_grid[s_i][1 + day_i] == "X")
-            opp_day_filled = sum(1 for s_i in range(len(SLOTS)) if opp_grid[s_i][1 + day_i] == "X")
-            your_daily_fills.append(your_day_filled)
-            opp_daily_fills.append(opp_day_filled)
 
         # Print comparison table
         print(f"{'':20} {'YOUR TEAM':>12}  {'OPPONENT':>12}  {'DIFF':>8}")
