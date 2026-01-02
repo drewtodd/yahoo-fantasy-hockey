@@ -434,9 +434,11 @@ Automatically analyze available free agents and recommend the best waiver wire p
 - [ ] Single drop candidate per run (can run multiple times for multiple drops)
 
 ### Player Value Metrics (in priority order)
-1. **Preferred**: Expected fantasy points for the week (if available from Yahoo API)
-2. **Fallback 1**: Current position rank (lower is better)
-3. **Fallback 2**: Season average fantasy points as proxy for value
+1. **Primary Sort**: Efficiency gain (number of games added to weekly schedule)
+2. **Secondary Sort**: Overall Rank (OR#) - Yahoo's **current** overall rank (lower is better)
+   - Extracted from Yahoo API `player_ranks` with `rank_type="OR"`
+   - This is the live, current-season ranking, not preseason
+3. **Tertiary Sort**: Total fantasy points (FPTS) - Season total fantasy points
 
 ### Implementation Notes
 - Reuses existing player swap infrastructure from Phase 3
@@ -483,19 +485,24 @@ Simulating 85 potential swaps...
 
 === Top 10 Free Agent Recommendations ===
 
-RANK  PLAYER              TEAM  POS      GAMES   EFF     FPTS/WK
-                                         ADDED   GAIN    (EST)
-──────────────────────────────────────────────────────────────────
-1.    Nathan MacKinnon   COL   C,RW       +5    +7.1%    85.2
-2.    Cale Makar         COL   D          +4    +5.7%    72.3
-3.    Leon Draisaitl     EDM   C,LW       +4    +5.7%    78.1
-4.    Artemi Panarin     NYR   LW         +3    +4.3%    68.9
-5.    Quinn Hughes       VAN   D          +3    +4.3%    65.2
-6.    Mika Zibanejad     NYR   C          +2    +2.9%    62.1
-7.    Brady Tkachuk      OTT   LW         +2    +2.9%    58.4
-8.    Roman Josi         NSH   D          +2    +2.9%    61.7
-9.    Elias Pettersson   VAN   C,LW       +1    +1.4%    64.3
-10.   Adam Fox           NYR   D          +1    +1.4%    59.8
+RANK   PLAYER                    TEAM  POS        EFF   OR#   FPTS   OWN%
+────── ───────────────────────── ───── ────────── ───── ───── ────── ──────
+1      Nathan MacKinnon          COL   C/RW       +5     1   385.2  95.0%
+2      Cale Makar                COL   D          +4     2   372.3  98.0%
+3      Leon Draisaitl            EDM   C/LW       +4     3   378.1  96.0%
+4      Artemi Panarin            NYR   LW         +3     4   368.9  94.0%
+5      Quinn Hughes              VAN   D          +3     5   365.2  93.0%
+6      Mika Zibanejad            NYR   C          +2     6   362.1  92.0%
+7      Brady Tkachuk             OTT   LW         +2     7   358.4  91.0%
+8      Roman Josi                NSH   D          +2     8   361.7  90.0%
+9      Elias Pettersson          VAN   C/LW       +1     9   364.3  89.0%
+10     Adam Fox                  NYR   D          +1    10   359.8  88.0%
+
+Column Definitions:
+- EFF: Schedule efficiency gain (games added to weekly roster)
+- OR#: Overall Rank among available free agents (lower is better)
+- FPTS: Total fantasy points accumulated this season
+- OWN%: League ownership percentage
 
 Green = positive impact, Red = negative impact, Yellow = neutral
 
@@ -519,3 +526,7 @@ To see full swap details for a specific player, use:
 - [ ] Integration with team comparison to find waiver moves that close gaps
 - [ ] Historical trend analysis (player hot/cold streaks)
 - [ ] Injury status awareness (exclude injured players from recommendations)
+- [ ] **Next 7/14 Days Projections**: Yahoo's UI shows "Next 7 Days" and "Next 14 Days" projected fantasy points. However, these projections are not available through the public Yahoo Fantasy API (tested with `projected_stats`, `projections`, `expert_picks` parameters - all return 400 errors). Potential workarounds:
+  - Calculate rolling average from recent games (last 7/14/30 days)
+  - Use external projection sources (FantasyPros, Daily Faceoff, etc.)
+  - Scrape Yahoo's web interface (not recommended - fragile, may violate TOS)
