@@ -174,6 +174,43 @@ def build_player_game_matrix(players: List[Player], week_start: dt.date) -> Dict
     return {p.name: team_to_dates[yahoo_team_to_nhl_tri(p.team)] for p in players}
 
 
+def build_single_date_game_matrix(players: List[Player], target_date: dt.date) -> Dict[str, bool]:
+    """
+    Map player.name -> bool (playing on target_date).
+    Optimized for single-date lookup.
+    """
+    team_games: Dict[str, bool] = {}  # Cache team schedules
+    result: Dict[str, bool] = {}
+
+    for p in players:
+        tri = yahoo_team_to_nhl_tri(p.team)
+        if tri not in team_games:
+            # Fetch week containing target_date, check if that date has games
+            week_start = week_start_monday(target_date)
+            week_games = fetch_team_week_games(tri, week_start)
+            team_games[tri] = target_date in week_games
+        result[p.name] = team_games[tri]
+
+    return result
+
+
+def calculate_position_flexibility(player: Player) -> Tuple[int, str]:
+    """
+    Returns (position_count, display_string).
+
+    Examples:
+      ("C",) -> (1, "C")
+      ("C", "LW") -> (2, "C/LW (2)")
+      ("C", "LW", "RW") -> (3, "C/LW/RW (3)")
+    """
+    valid_pos = [p for p in player.pos if p not in ('Util', 'BN', 'IR', 'IR+', 'NA')]
+    count = len(valid_pos)
+    display = '/'.join(valid_pos)
+    if count > 1:
+        display += f" ({count})"
+    return count, display
+
+
 def solve_daily_assignment(
     active_players: List[Player],
     slots: List[str],
@@ -530,6 +567,14 @@ def main() -> int:
         metavar="N",
         help="Number of recommendations to display when using --recommend-add (default: 10).",
     )
+    ap.add_argument(
+        "--available-fas",
+        type=str,
+        metavar="YYYY-MM-DD",
+        help="Find best streaming pickups for a specific date. Shows available players "
+             "with games on that date ranked by FPTS/G, and suggests drop candidates "
+             "from your roster who aren't playing. Requires Yahoo API.",
+    )
     args = ap.parse_args()
 
     # Normalize export aliases
@@ -580,6 +625,29 @@ def main() -> int:
             return 2
         # Force single-week analysis in recommendation mode
         args.weeks = 1
+
+    # Validate available FAs mode
+    if args.available_fas:
+        if args.local:
+            print("Error: --available-fas requires Yahoo API (cannot use with --local)", file=sys.stderr)
+            return 2
+        if args.recommend_add:
+            print("Error: Cannot use --available-fas and --recommend-add together", file=sys.stderr)
+            return 2
+        if args.compare_team:
+            print("Error: Cannot use --available-fas and --compare-team together", file=sys.stderr)
+            return 2
+        if args.player_swap:
+            print("Error: Cannot use --available-fas and --player-swap together", file=sys.stderr)
+            return 2
+
+        # Parse and validate date format
+        try:
+            target_date = dt.datetime.strptime(args.available_fas, "%Y-%m-%d").date()
+            args.available_fas_date = target_date
+        except ValueError:
+            print(f"Error: Invalid date format '{args.available_fas}'. Use YYYY-MM-DD format.", file=sys.stderr)
+            return 2
 
     tz = gettz("America/Los_Angeles")
     today = dt.datetime.now(tz=tz).date()
@@ -1518,6 +1586,199 @@ def main() -> int:
         print("  Est Week = Estimated fantasy points for this week (FPTS/G × G@)")
         print("  Est Δ    = Estimated weekly point differential (New Player Est Week - Drop Player Est Week)")
         print("  OWN%     = Ownership percentage")
+
+        return 0
+
+    # Handle --available-fas mode (streaming pickups for specific date)
+    if args.available_fas:
+        from yahoo_client import YahooClient
+        from config import config
+
+        target_date = args.available_fas_date
+
+        # Initialize Yahoo client
+        client = YahooClient()
+        client.authorize()
+
+        # Fetch roster
+        print("Fetching roster from Yahoo API...")
+        roster_data = client.fetch_team_roster()
+        players = [
+            Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
+            for p in roster_data
+        ]
+
+        # Fetch available players (limit to top 100)
+        print("Fetching available free agents...")
+        available_players = client.fetch_available_players(count=100)
+
+        # Filter out goalies
+        available_players = [p for p in available_players if 'G' not in p['pos']]
+
+        # Filter out injured players
+        injured_count = sum(1 for p in available_players if p.get('is_injured', False))
+        if injured_count > 0:
+            print(f"  Filtered out {injured_count} injured players")
+        available_players = [p for p in available_players if not p.get('is_injured', False)]
+
+        print(f"  Found {len(available_players)} available skaters")
+
+        # Pre-fetch NHL stats for GP calculations
+        print("Fetching NHL stats for FPTS/G calculations...")
+        nhl_api.fetch_season_stats()
+
+        # Build single-date game matrix for available players
+        available_player_objs = [
+            Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
+            for p in available_players
+        ]
+        available_games = build_single_date_game_matrix(available_player_objs, target_date)
+
+        # Filter available players to those playing on target date
+        streaming_candidates = []
+        for i, avail_data in enumerate(available_players):
+            player_name = avail_data["name"]
+            if available_games.get(player_name, False):
+                # Get NHL stats for FPTS/G calculation
+                gp = nhl_api.get_games_played(player_name, avail_data["team"])
+                fpts = avail_data.get("fantasy_points_total", 0.0)
+
+                if gp and gp > 0 and fpts > 0:
+                    fpts_per_game = fpts / gp
+                    streaming_candidates.append({
+                        "player": Player(name=player_name, team=avail_data["team"], pos=tuple(avail_data["pos"])),
+                        "fpts_per_game": fpts_per_game,
+                        "overall_rank": avail_data.get("overall_rank", 999),
+                        "fpts": fpts,
+                        "gp": gp,
+                        "ownership_pct": avail_data.get("ownership_pct", 0.0),
+                        "positions": avail_data["pos"]
+                    })
+
+        if len(streaming_candidates) == 0:
+            print(f"\nNo available players found with games on {target_date.strftime('%A, %b %d, %Y')}")
+            return 0
+
+        # Sort by FPTS/G (desc), then OR# (asc)
+        streaming_candidates.sort(key=lambda x: (-x["fpts_per_game"], x["overall_rank"]))
+
+        # Build single-date game matrix for roster players
+        roster_games = build_single_date_game_matrix(players, target_date)
+
+        # Identify drop candidates (roster players NOT playing on target date)
+        drop_candidates = []
+        for p in players:
+            if not roster_games.get(p.name, False):
+                # Get NHL stats for FPTS/G calculation
+                gp = nhl_api.get_games_played(p.name, p.team)
+                fpts = p.fpts if hasattr(p, 'fpts') else 0.0
+
+                # Try to fetch FPTS from Yahoo if not in player object
+                if fpts == 0.0:
+                    try:
+                        last_name = p.name.split()[-1]
+                        search_endpoint = (
+                            f"league/nhl.l.{config.league_id}/players;"
+                            f"search={last_name};"
+                            f"count=25;"
+                            f"out=stats"
+                        )
+                        search_data = client._api_request(search_endpoint)
+
+                        if "fantasy_content" in search_data and "league" in search_data["fantasy_content"]:
+                            league_data = search_data["fantasy_content"]["league"]
+                            for item in league_data:
+                                if isinstance(item, dict) and "players" in item:
+                                    players_data = item["players"]
+                                    for key, player_wrapper_data in players_data.items():
+                                        if key == "count":
+                                            continue
+
+                                        player_wrapper = player_wrapper_data["player"]
+                                        player_info = player_wrapper[0]
+
+                                        name_obj = next((obj for obj in player_info if isinstance(obj, dict) and "name" in obj), None)
+                                        if name_obj and name_obj["name"]["full"].lower() == p.name.lower():
+                                            for elem in player_wrapper[1:]:
+                                                if isinstance(elem, dict) and "player_points" in elem:
+                                                    player_points = elem["player_points"]
+                                                    if "total" in player_points:
+                                                        try:
+                                                            fpts = float(player_points["total"])
+                                                        except (ValueError, TypeError):
+                                                            fpts = 0.0
+                                                        break
+                                            break
+                    except Exception:
+                        pass  # Use 0.0 if we can't fetch
+
+                if gp and gp > 0 and fpts > 0:
+                    fpts_per_game = fpts / gp
+                    pos_count, pos_display = calculate_position_flexibility(p)
+
+                    drop_candidates.append({
+                        "player": p,
+                        "fpts_per_game": fpts_per_game,
+                        "gp": gp,
+                        "fpts": fpts,
+                        "position_count": pos_count,
+                        "position_display": pos_display
+                    })
+
+        # Sort drop candidates by FPTS/G (asc), then position count (desc for flexibility)
+        drop_candidates.sort(key=lambda x: (x["fpts_per_game"], -x["position_count"]))
+
+        # Display results
+        date_str = target_date.strftime("%A, %b %d, %Y")
+        print(f"\n=== Streaming Pickups for {date_str} ===\n")
+
+        # Show top streaming options
+        top_n = min(args.top, len(streaming_candidates))
+        print("TOP STREAMING OPTIONS (players with games today):\n")
+        print("RANK   PLAYER                    TEAM  POS           GP  OR#   FPTS  FPTS/G  Est Game   OWN%")
+        print("────── ───────────────────────── ───── ──────────── ──── ───── ────── ─────── ───────── ──────")
+
+        for rank, candidate in enumerate(streaming_candidates[:top_n], 1):
+            player = candidate["player"]
+            pos_str = '/'.join(player.pos)
+            print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_str:<12} {candidate['gp']:>4} {candidate['overall_rank']:>5} {candidate['fpts']:>6.1f} {candidate['fpts_per_game']:>7.2f} {candidate['fpts_per_game']:>9.2f} {candidate['ownership_pct']:>5.1f}%")
+
+        # Show drop candidates if any
+        if len(drop_candidates) > 0:
+            best_pickup_fpts_g = streaming_candidates[0]["fpts_per_game"]
+
+            print("\nYOUR DROP CANDIDATES (not playing today, sorted by worst FPTS/G):\n")
+            print("RANK   PLAYER                    TEAM  POS              GP   FPTS  FPTS/G  Est Δ")
+            print("────── ───────────────────────── ───── ─────────────── ──── ────── ─────── ───────")
+
+            for rank, candidate in enumerate(drop_candidates[:top_n], 1):
+                player = candidate["player"]
+                est_delta = best_pickup_fpts_g - candidate["fpts_per_game"]
+
+                # Color code Est Δ
+                if est_delta > 0:
+                    est_delta_str = f"{Colors.GREEN}+{est_delta:.2f}{Colors.RESET}"
+                elif est_delta < 0:
+                    est_delta_str = f"{Colors.RED}{est_delta:.2f}{Colors.RESET}"
+                else:
+                    est_delta_str = f"{Colors.YELLOW}{est_delta:.2f}{Colors.RESET}"
+
+                est_delta_padded = pad_colored(est_delta_str, 7, '>')
+
+                print(f"{rank:<6} {player.name:<25} {player.team:<5} {candidate['position_display']:<15} {candidate['gp']:>4} {candidate['fpts']:>6.1f} {candidate['fpts_per_game']:>7.2f} {est_delta_padded}")
+        else:
+            print(f"\nAll your players are already playing on {date_str}")
+
+        # Print legend
+        print("\nLegend:")
+        print("  GP        = Games played this season (from NHL API)")
+        print("  OR#       = Season rank (Yahoo's 2025 season performance rank, lower = better)")
+        print("  FPTS      = Total fantasy points this season")
+        print("  FPTS/G    = Fantasy points per game (FPTS ÷ GP)")
+        print("  Est Game  = Estimated points for this single game (same as FPTS/G)")
+        print("  Est Δ     = Expected point differential (Best Pickup FPTS/G - Drop Player FPTS/G)")
+        print("  OWN%      = Ownership percentage")
+        print("  POS (N)   = Position flexibility indicator (number of eligible positions)")
 
         return 0
 
