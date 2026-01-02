@@ -25,6 +25,11 @@ import requests
 
 from config import config
 
+# Cache configuration
+_cache_dir = Path(".cache")
+_yahoo_fa_cache_file = _cache_dir / "yahoo_free_agents.json"
+_cache_ttl = 3600  # 1 hour cache for Yahoo free agents (stats update frequently during games)
+
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
     """HTTP handler for OAuth callback."""
@@ -301,15 +306,17 @@ class YahooClient:
         except ValueError as e:
             raise RuntimeError(f"Invalid JSON response from Yahoo API. Check that the endpoint is correct.")
 
-    def fetch_team_roster(self, league_id: Optional[str] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def fetch_team_roster(self, league_id: Optional[str] = None, team_id: Optional[str] = None, include_stats: bool = False) -> List[Dict[str, Any]]:
         """Fetch team roster from Yahoo Fantasy API.
 
         Args:
             league_id: League ID (defaults to config.league_id)
             team_id: Team ID (defaults to config.team_id)
+            include_stats: Include player stats and fantasy points (default False)
 
         Returns:
             List of player dictionaries with name, team, and positions
+            If include_stats=True, also includes fantasy_points_total
         """
         league_id = league_id or config.league_id
         team_id = team_id or config.team_id
@@ -317,47 +324,79 @@ class YahooClient:
         if not league_id or not team_id:
             raise ValueError("League ID and Team ID must be provided")
 
-        # Fetch team roster
-        endpoint = f"league/nhl.l.{league_id}/teams;team_keys=nhl.l.{league_id}.t.{team_id}/roster"
+        # Fetch team roster (with stats if requested)
+        if include_stats:
+            endpoint = f"team/nhl.l.{league_id}.t.{team_id}/roster/players/stats"
+        else:
+            endpoint = f"league/nhl.l.{league_id}/teams;team_keys=nhl.l.{league_id}.t.{team_id}/roster"
 
         data = self._api_request(endpoint)
 
         # Parse response
         try:
             fantasy_content = data["fantasy_content"]
-            # teams data is in the second element of the league array
-            league_teams = fantasy_content["league"][1]
-            teams = league_teams["teams"]
-            team = teams["0"]["team"]
 
-            # Find the roster data in the team array
-            roster_data = None
-            for item in team:
-                if isinstance(item, list):
-                    roster_data = item[0].get("roster") if item else None
-                    if roster_data:
+            # Different parsing for stats vs no-stats endpoints
+            if include_stats:
+                # stats endpoint returns team directly
+                team_data = fantasy_content["team"]
+                if isinstance(team_data, list):
+                    team_data = team_data[0]
+
+                # Find roster in team data
+                roster_data = None
+                for item in team_data:
+                    if isinstance(item, dict) and "roster" in item:
+                        roster_data = item["roster"]
                         break
-                elif isinstance(item, dict) and "roster" in item:
-                    roster_data = item["roster"]
-                    break
 
-            if not roster_data:
-                raise RuntimeError("No roster data found in team response")
+                if not roster_data:
+                    raise RuntimeError("No roster data found in team response")
 
-            # roster_data is a list, get first element
-            if isinstance(roster_data, list):
-                roster_dict = roster_data[0]
+                # roster_data is a list, get first element
+                if isinstance(roster_data, list):
+                    roster_dict = roster_data[0]
+                else:
+                    roster_dict = roster_data
+
+                players_data = roster_dict.get("players", {})
             else:
-                roster_dict = roster_data.get("0", {})
+                # Original no-stats parsing
+                league_teams = fantasy_content["league"][1]
+                teams = league_teams["teams"]
+                team = teams["0"]["team"]
 
-            players_data = roster_dict.get("players", {})
+                # Find the roster data in the team array
+                roster_data = None
+                for item in team:
+                    if isinstance(item, list):
+                        roster_data = item[0].get("roster") if item else None
+                        if roster_data:
+                            break
+                    elif isinstance(item, dict) and "roster" in item:
+                        roster_data = item["roster"]
+                        break
+
+                if not roster_data:
+                    raise RuntimeError("No roster data found in team response")
+
+                # roster_data is a list, get first element
+                if isinstance(roster_data, list):
+                    roster_dict = roster_data[0]
+                else:
+                    roster_dict = roster_data.get("0", {})
+
+                players_data = roster_dict.get("players", {})
 
             players = []
             for key, player_data in players_data.items():
                 if key == "count":
                     continue
 
-                player = player_data["player"][0]
+                player_wrapper = player_data["player"]
+
+                # First element contains player attributes
+                player = player_wrapper[0]
                 name_obj = next((p for p in player if isinstance(p, dict) and "name" in p), None)
                 team_obj = next((p for p in player if isinstance(p, dict) and "editorial_team_abbr" in p), None)
                 pos_obj = next((p for p in player if isinstance(p, dict) and "eligible_positions" in p), None)
@@ -370,11 +409,25 @@ class YahooClient:
                     # Filter out utility positions and bench
                     positions = [p for p in positions if p not in ("Util", "BN", "IR", "IR+", "NA")]
 
-                    players.append({
+                    player_dict = {
                         "name": full_name,
                         "team": team_abbr,
                         "pos": positions,
-                    })
+                    }
+
+                    # Extract fantasy points if stats were requested
+                    if include_stats and len(player_wrapper) > 1:
+                        for elem in player_wrapper[1:]:
+                            if isinstance(elem, dict) and "player_points" in elem:
+                                player_points = elem["player_points"]
+                                if "total" in player_points:
+                                    try:
+                                        player_dict["fantasy_points_total"] = float(player_points["total"])
+                                    except (ValueError, TypeError):
+                                        player_dict["fantasy_points_total"] = 0.0
+                                break
+
+                    players.append(player_dict)
 
             return players
 
@@ -485,3 +538,253 @@ class YahooClient:
 
         except (KeyError, IndexError, TypeError, AttributeError) as e:
             raise RuntimeError(f"Failed to fetch player {player_id} from Yahoo API: {e}")
+
+    def _load_fa_cache(self, league_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Load free agents cache from disk if fresh."""
+        if not _yahoo_fa_cache_file.exists():
+            return None
+
+        try:
+            # Check file modification time
+            file_mtime = os.path.getmtime(_yahoo_fa_cache_file)
+            current_time = time.time()
+            age = current_time - file_mtime
+
+            # If cache is older than TTL, don't use it
+            if age > _cache_ttl:
+                return None
+
+            # Load cache from file
+            with open(_yahoo_fa_cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+
+            # Verify league ID matches
+            if cache_data.get("league_id") != league_id:
+                return None
+
+            print(f"  ✓ Loaded free agents from cache ({age / 60:.1f} minutes old)")
+            return cache_data.get("players", [])
+
+        except Exception:
+            return None
+
+    def _save_fa_cache(self, league_id: str, players: List[Dict[str, Any]]) -> None:
+        """Save free agents cache to disk."""
+        try:
+            # Create cache directory if it doesn't exist
+            _cache_dir.mkdir(exist_ok=True)
+
+            cache_data = {
+                "league_id": league_id,
+                "timestamp": time.time(),
+                "players": players
+            }
+
+            # Save to temp file first, then rename (atomic operation)
+            temp_file = _yahoo_fa_cache_file.with_suffix('.tmp')
+
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f)
+
+            # Atomic rename
+            temp_file.replace(_yahoo_fa_cache_file)
+
+        except Exception:
+            pass  # Fail silently, cache is optional
+
+    def fetch_available_players(
+        self,
+        league_id: Optional[str] = None,
+        count: int = 100,
+        start: int = 0,
+        use_cache: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Fetch available free agents from Yahoo Fantasy API.
+
+        Args:
+            league_id: League ID (defaults to config.league_id)
+            count: Number of players to fetch (default 100)
+            start: Starting index for pagination (default 0)
+            use_cache: Use cached data if available and fresh (default True)
+
+        Returns:
+            List of player dictionaries with name, team, positions, player_id,
+            ownership percentage, stats, fantasy_points_total, and overall_rank
+        """
+        league_id = league_id or config.league_id
+
+        if not league_id:
+            raise ValueError("League ID must be provided")
+
+        # Check cache if enabled and fetching from start
+        if use_cache and start == 0:
+            cached_players = self._load_fa_cache(league_id)
+            if cached_players:
+                # Return subset if count is less than cached
+                return cached_players[:count] if count < len(cached_players) else cached_players
+
+        # Fetch free agents sorted by overall rank with stats, ownership, and ranks
+        endpoint = (
+            f"league/nhl.l.{league_id}/players;"
+            f"status=FA;"
+            f"sort=OR;"
+            f"count={count};"
+            f"start={start};"
+            f"out=percent_owned,stats,ranks"
+        )
+
+        data = self._api_request(endpoint)
+
+        try:
+            fantasy_content = data["fantasy_content"]
+            league = fantasy_content["league"]
+
+            # Find players data in league array
+            players_data = None
+            for item in league:
+                if isinstance(item, dict) and "players" in item:
+                    players_data = item["players"]
+                    break
+
+            if not players_data:
+                return []
+
+            players = []
+            # Get player count
+            count_val = players_data.get("count", 0)
+
+            for i in range(count_val):
+                key = str(i)
+                if key not in players_data:
+                    continue
+
+                player_wrapper = players_data[key]["player"]
+
+                # player_wrapper is an array with 4 elements:
+                # [0] = array of player attribute objects
+                # [1] = percent_owned object
+                # [2] = player_stats/player_points object
+                # [3] = player_ranks object (when ranks requested)
+
+                player_id = None
+                name = None
+                team_abbr = None
+                positions = []
+                ownership_pct = 0.0
+                stats_dict = {}
+                overall_rank = None
+                is_injured = False
+                injury_status = None
+
+                # Parse player attributes from first array element
+                if len(player_wrapper) > 0 and isinstance(player_wrapper[0], list):
+                    for item in player_wrapper[0]:
+                        if not isinstance(item, dict):
+                            continue
+
+                        # Extract player ID
+                        if "player_id" in item:
+                            player_id = item["player_id"]
+
+                        # Extract name
+                        if "name" in item:
+                            name = item["name"]["full"]
+
+                        # Extract team
+                        if "editorial_team_abbr" in item:
+                            team_abbr = item["editorial_team_abbr"]
+
+                        # Extract injury status
+                        if "status" in item:
+                            injury_status = item.get("status")
+                            if injury_status in ("IR", "O", "D"):  # IR, Out, Day-to-Day
+                                is_injured = True
+
+                        # Extract positions
+                        if "eligible_positions" in item:
+                            positions = [p["position"] for p in item["eligible_positions"]]
+                            # Filter out utility positions
+                            positions = [p for p in positions if p not in ("Util", "BN", "IR", "IR+", "NA")]
+
+                # Parse ownership from second array element
+                if len(player_wrapper) > 1 and isinstance(player_wrapper[1], dict):
+                    pct_data = player_wrapper[1].get("percent_owned", [])
+                    if isinstance(pct_data, list):
+                        # Find the value object in the array
+                        for pct_obj in pct_data:
+                            if isinstance(pct_obj, dict) and "value" in pct_obj:
+                                ownership_pct = float(pct_obj["value"])
+                                break
+
+                # Parse stats and fantasy points from third array element
+                fantasy_points_total = 0.0
+                if len(player_wrapper) > 2 and isinstance(player_wrapper[2], dict):
+                    # Extract individual stats
+                    player_stats = player_wrapper[2].get("player_stats", {})
+                    if "stats" in player_stats:
+                        stats_list = player_stats["stats"]
+                        # Parse stats into dictionary
+                        for stat in stats_list:
+                            if "stat" in stat:
+                                stat_obj = stat["stat"]
+                                stat_id = stat_obj.get("stat_id")
+                                value = stat_obj.get("value")
+                                if stat_id and value:
+                                    stats_dict[stat_id] = value
+
+                    # Extract total fantasy points (provided directly by Yahoo)
+                    player_points = player_wrapper[2].get("player_points", {})
+                    if "total" in player_points:
+                        try:
+                            fantasy_points_total = float(player_points["total"])
+                        except (ValueError, TypeError):
+                            fantasy_points_total = 0.0
+
+                # Parse ranks from fourth array element
+                if len(player_wrapper) > 3 and isinstance(player_wrapper[3], dict):
+                    player_ranks = player_wrapper[3].get("player_ranks", [])
+                    # Find the current season rank (S/2025) instead of preseason OR rank
+                    for rank_entry in player_ranks:
+                        if isinstance(rank_entry, dict) and "player_rank" in rank_entry:
+                            rank_obj = rank_entry["player_rank"]
+                            # Use current season rank (S with season 2025) for accurate current performance
+                            if rank_obj.get("rank_type") == "S" and rank_obj.get("rank_season") == "2025":
+                                try:
+                                    overall_rank = int(rank_obj.get("rank_value", 0))
+                                except (ValueError, TypeError):
+                                    overall_rank = None
+                                break
+                    # Fallback to OR (preseason rank) if no current season rank found
+                    if overall_rank is None:
+                        for rank_entry in player_ranks:
+                            if isinstance(rank_entry, dict) and "player_rank" in rank_entry:
+                                rank_obj = rank_entry["player_rank"]
+                                if rank_obj.get("rank_type") == "OR":
+                                    try:
+                                        overall_rank = int(rank_obj.get("rank_value", 0))
+                                    except (ValueError, TypeError):
+                                        overall_rank = None
+                                    break
+
+                if player_id and name and team_abbr:
+                    players.append({
+                        "player_id": player_id,
+                        "name": name,
+                        "team": team_abbr,
+                        "pos": positions,
+                        "ownership_pct": ownership_pct,
+                        "stats": stats_dict,
+                        "fantasy_points_total": fantasy_points_total,
+                        "overall_rank": overall_rank,
+                        "is_injured": is_injured,
+                        "injury_status": injury_status
+                    })
+
+            # Save to cache if fetching from start (full list)
+            if start == 0:
+                self._save_fa_cache(league_id, players)
+
+            return players
+
+        except (KeyError, IndexError, TypeError, AttributeError) as e:
+            raise RuntimeError(f"Failed to fetch available players from Yahoo API: {e}")

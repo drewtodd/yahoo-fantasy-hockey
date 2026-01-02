@@ -27,6 +27,8 @@ import yaml
 from dateutil.tz import gettz
 from ortools.sat.python import cp_model
 
+import nhl_api
+
 # ---------- Config: Yahoo active slots (based on your table) ----------
 SLOTS: List[str] = ["C", "C", "LW", "LW", "RW", "RW", "D", "D", "D", "D", "G", "G"]
 DAYS = ["M", "T", "W", "Th", "F", "Sa", "Su"]
@@ -45,6 +47,11 @@ YAHOO_TO_NHL_TRI = {
 
 NHL_BASE = "https://api-web.nhle.com/v1"
 
+# ---------- NHL Schedule Cache ----------
+# Cache team schedules to avoid redundant API calls during bulk simulations
+# Key: (team_tri, week_start_isoformat), Value: Set[dt.date]
+_nhl_schedule_cache: Dict[Tuple[str, str], Set[dt.date]] = {}
+
 # ---------- ANSI Color codes ----------
 class Colors:
     GREEN = "\033[92m"
@@ -52,6 +59,40 @@ class Colors:
     RED = "\033[91m"
     RESET = "\033[0m"
     BOLD = "\033[1m"
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI color codes from text."""
+    import re
+    ansi_escape = re.compile(r'\033\[[0-9;]+m')
+    return ansi_escape.sub('', text)
+
+
+def pad_colored(text: str, width: int, align: str = '>') -> str:
+    """Pad a string that may contain ANSI color codes.
+
+    Args:
+        text: The text to pad (may contain ANSI codes)
+        width: The desired visible width
+        align: Alignment ('<', '>', '^')
+
+    Returns:
+        Padded string with color codes preserved
+    """
+    visible_len = len(strip_ansi(text))
+    padding_needed = width - visible_len
+
+    if padding_needed <= 0:
+        return text
+
+    if align == '<':
+        return text + ' ' * padding_needed
+    elif align == '>':
+        return ' ' * padding_needed + text
+    else:  # center
+        left_pad = padding_needed // 2
+        right_pad = padding_needed - left_pad
+        return ' ' * left_pad + text + ' ' * right_pad
 
 
 @dataclass(frozen=True)
@@ -79,7 +120,15 @@ def fetch_team_week_games(team_tri: str, week_start: dt.date) -> Set[dt.date]:
     """
     Returns set of game dates (local date as provided by schedule; we only care about date).
     Endpoint example: /v1/club-schedule/ari/week/2023-09-30  [oai_citation:4‡Home Assistant Community](https://community.home-assistant.io/t/nhl-api-custom-component-track-your-favorite-hockey-team-in-home-assistant/140428?page=9&utm_source=chatgpt.com)
+
+    Uses global cache to avoid redundant API calls during bulk simulations.
     """
+    # Check cache first
+    cache_key = (team_tri, week_start.isoformat())
+    if cache_key in _nhl_schedule_cache:
+        return _nhl_schedule_cache[cache_key]
+
+    # Fetch from API if not cached
     url = f"{NHL_BASE}/club-schedule/{team_tri}/week/{week_start.isoformat()}"
     r = requests.get(url, timeout=20)
     r.raise_for_status()
@@ -107,6 +156,8 @@ def fetch_team_week_games(team_tri: str, week_start: dt.date) -> Set[dt.date]:
             except ValueError:
                 continue
 
+    # Cache the result before returning
+    _nhl_schedule_cache[cache_key] = game_dates
     return game_dates
 
 
@@ -466,6 +517,19 @@ def main() -> int:
         metavar=("DROP_PLAYER_ID", "ADD_PLAYER_ID"),
         help="Simulate swapping players (forces single-week mode). First ID is player to drop, second is player to add. Requires Yahoo API.",
     )
+    ap.add_argument(
+        "--recommend-add",
+        type=str,
+        metavar="DROP_PLAYER_NAME",
+        help="Recommend free agent additions by simulating swaps with available players (forces single-week mode). Specify player by name. Requires Yahoo API.",
+    )
+    ap.add_argument(
+        "--top",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Number of recommendations to display when using --recommend-add (default: 10).",
+    )
     args = ap.parse_args()
 
     # Normalize export aliases
@@ -497,7 +561,24 @@ def main() -> int:
         if args.day:
             print("Error: --player-swap only works with week mode (cannot use with --day)", file=sys.stderr)
             return 2
+        if args.recommend_add:
+            print("Error: Cannot use --player-swap and --recommend-add together", file=sys.stderr)
+            return 2
         # Force single-week analysis in swap mode
+        args.weeks = 1
+
+    # Validate recommend add mode
+    if args.recommend_add:
+        if args.local:
+            print("Error: --recommend-add requires Yahoo API (cannot use with --local)", file=sys.stderr)
+            return 2
+        if args.day:
+            print("Error: --recommend-add only works with week mode (cannot use with --day)", file=sys.stderr)
+            return 2
+        if args.compare_team:
+            print("Error: Cannot use --recommend-add and --compare-team together", file=sys.stderr)
+            return 2
+        # Force single-week analysis in recommendation mode
         args.weeks = 1
 
     tz = gettz("America/Los_Angeles")
@@ -507,6 +588,7 @@ def main() -> int:
     if args.sync:
         try:
             from yahoo_client import YahooClient
+            from config import config
 
             print("Fetching roster from Yahoo Fantasy API...")
             client = YahooClient()
@@ -541,11 +623,13 @@ def main() -> int:
     yahoo_failed = False
     opponent_players: Optional[List[Player]] = None
     swap_add_player: Optional[Player] = None
+    available_players: Optional[List[Dict]] = None
 
     if not use_local:
         # Try Yahoo first (default behavior)
         try:
             from yahoo_client import YahooClient
+            from config import config
 
             print("Fetching roster from Yahoo Fantasy API...")
             client = YahooClient()
@@ -595,6 +679,21 @@ def main() -> int:
                     print(f"✓ Fetched player to add: {swap_add_player.name} ({swap_add_player.team}, {'/'.join(swap_add_player.pos)})")
                 except Exception as e:
                     print(f"Error fetching player {add_player_id}: {e}", file=sys.stderr)
+                    return 2
+
+            # Fetch available players if recommendation mode is active
+            if args.recommend_add:
+                print("Fetching top 100 available free agents...")
+                try:
+                    available_players = client.fetch_available_players(count=100)
+                    # Filter out goalies
+                    available_players = [p for p in available_players if 'G' not in p['pos']]
+                    # Filter out injured players (IR, Out, Day-to-Day)
+                    injured_count = sum(1 for p in available_players if p.get('is_injured', False))
+                    available_players = [p for p in available_players if not p.get('is_injured', False)]
+                    print(f"✓ Fetched {len(available_players)} available skaters (goalies and {injured_count} injured players filtered out)")
+                except Exception as e:
+                    print(f"Error fetching available players: {e}", file=sys.stderr)
                     return 2
 
         except ImportError:
@@ -1142,6 +1241,283 @@ def main() -> int:
             diff_str = f"{'+' if diff >= 0 else ''}{diff}"
             diff_color = Colors.GREEN if diff > 0 else (Colors.RED if diff < 0 else Colors.YELLOW)
             print(f"{day_label:20} {current_filled:>12}  {modified_filled:>12}  {diff_color}{diff_str:>8}{Colors.RESET}")
+
+        return 0
+
+    # Handle recommend add mode (must be before regular week mode)
+    if args.recommend_add and available_players:
+        drop_player_name = args.recommend_add
+
+        # Find the drop player from roster by name
+        drop_player = None
+        for p in players:
+            if p.name.lower() == drop_player_name.lower():
+                drop_player = p
+                break
+
+        if not drop_player:
+            print(f"Error: Player '{drop_player_name}' not found in your roster", file=sys.stderr)
+            print("\nAvailable roster players:", file=sys.stderr)
+            for p in sorted(players, key=lambda x: x.name):
+                print(f"  - {p.name}", file=sys.stderr)
+            return 2
+
+        print(f"\nAnalyzing recommendations to replace: {drop_player.name} ({drop_player.team}, {'/'.join(drop_player.pos)})")
+
+        # Determine the week to analyze
+        if args.date:
+            provided_date = dt.date.fromisoformat(args.date)
+            week_start = week_start_monday(provided_date)
+        else:
+            week_start = week_start_monday(today)
+
+        week_end = week_start + dt.timedelta(days=6)
+        week_dates = daterange(week_start, 7)
+
+        print(f"Week: {week_start.isoformat()} → {week_end.isoformat()}\n")
+
+        # Build current roster game matrix
+        current_p_games = build_player_game_matrix(players, week_start)
+
+        # Calculate current roster efficiency
+        current_total_filled = 0
+        for day_date in week_dates:
+            current_active = [p for p in players if day_date in current_p_games.get(p.name, set())]
+            current_assignment = solve_daily_assignment(current_active, SLOTS)
+            current_total_filled += len(current_assignment)
+
+        # Get NHL stats for calculating PPG and weekly estimates
+        print("Fetching NHL stats for PPG calculations...")
+        nhl_api.fetch_season_stats()  # Pre-fetch and cache NHL stats
+
+        # Get games next week for drop player
+        drop_p_games = build_player_game_matrix([drop_player], week_start)
+        drop_games_next_week = len(drop_p_games.get(drop_player.name, set()))
+
+        # Calculate drop player's estimated weekly points
+        drop_player_gp = nhl_api.get_games_played(drop_player.name, drop_player.team)
+        drop_player_est_pts = 0.0  # Default
+        drop_player_fpts = 0.0
+        drop_player_ppg = 0.0
+
+        # Fetch drop player's stats from Yahoo API using league player search
+        try:
+            # Search for player by last name using league players endpoint
+            last_name = drop_player.name.split()[-1]
+            search_endpoint = (
+                f"league/nhl.l.{config.league_id}/players;"
+                f"search={last_name};"
+                f"count=25;"
+                f"out=stats"
+            )
+            search_data = client._api_request(search_endpoint)
+
+            # Parse search results to find matching player
+            found_player = False
+            if "fantasy_content" in search_data and "league" in search_data["fantasy_content"]:
+                league_data = search_data["fantasy_content"]["league"]
+                for item in league_data:
+                    if isinstance(item, dict) and "players" in item:
+                        players_data = item["players"]
+                        for key, player_wrapper_data in players_data.items():
+                            if key == "count":
+                                continue
+
+                            player_wrapper = player_wrapper_data["player"]
+                            player = player_wrapper[0]
+
+                            # Get player name
+                            name_obj = next((p for p in player if isinstance(p, dict) and "name" in p), None)
+                            if name_obj and name_obj["name"]["full"].lower() == drop_player.name.lower():
+                                # Found the player, extract fantasy points
+                                found_player = True
+                                for elem in player_wrapper[1:]:
+                                    if isinstance(elem, dict) and "player_points" in elem:
+                                        player_points = elem["player_points"]
+                                        if "total" in player_points:
+                                            try:
+                                                drop_player_fpts = float(player_points["total"])
+                                                print(f"  ✓ Found drop player in Yahoo API: {drop_player_fpts:.1f} FPTS")
+                                            except (ValueError, TypeError):
+                                                drop_player_fpts = 0.0
+                                            break
+                                break
+                        if found_player:
+                            break
+
+            if not found_player:
+                print(f"  Note: Could not find {drop_player.name} in Yahoo search results")
+        except Exception as e:
+            print(f"  Warning: Could not fetch drop player stats from Yahoo API: {e}")
+
+        # Calculate estimated weekly points for drop player
+        if drop_player_gp and drop_player_gp > 0 and drop_player_fpts > 0:
+            drop_player_ppg = drop_player_fpts / drop_player_gp
+            drop_player_est_pts = drop_player_ppg * drop_games_next_week
+            print(f"  Drop player info: {drop_player_fpts:.1f} FPTS, {drop_player_gp} GP, {drop_player_ppg:.2f} FPTS/G, {drop_games_next_week} G@ next week → Est {drop_player_est_pts:.1f} pts")
+        else:
+            print(f"  Drop player info: {drop_games_next_week} G@ next week (stats unavailable)")
+
+        # Run simulations for each available player
+        print(f"Simulating swaps with {len(available_players)} available players...")
+        recommendations = []
+
+        for i, avail_player_data in enumerate(available_players):
+            # Create Player object
+            avail_player = Player(
+                name=avail_player_data["name"],
+                team=avail_player_data["team"],
+                pos=tuple(avail_player_data["pos"])
+            )
+
+            # Create modified roster
+            modified_players = [p for p in players if p.name != drop_player_name]
+            modified_players.append(avail_player)
+
+            # Build modified roster game matrix
+            modified_p_games = build_player_game_matrix(modified_players, week_start)
+
+            # Calculate modified roster efficiency
+            modified_total_filled = 0
+            for day_date in week_dates:
+                modified_active = [p for p in modified_players if day_date in modified_p_games.get(p.name, set())]
+                modified_assignment = solve_daily_assignment(modified_active, SLOTS)
+                modified_total_filled += len(modified_assignment)
+
+            # Calculate efficiency gain
+            eff_gain = modified_total_filled - current_total_filled
+
+            # Get overall rank (OR) from Yahoo API - lower is better
+            overall_rank = avail_player_data.get("overall_rank", i + 1)  # Fallback to index if not available
+
+            # Get total fantasy points (Yahoo provides this directly)
+            fantasy_points_total = avail_player_data.get("fantasy_points_total", 0.0)
+
+            # Get games next week for this player
+            avail_games_next_week = len(modified_p_games.get(avail_player.name, set()))
+
+            # Get games played from NHL API to calculate PPG
+            gp = nhl_api.get_games_played(avail_player.name, avail_player.team)
+
+            # Calculate estimated weekly point differential
+            weekly_pt_diff = None
+            ppg = None
+            avail_estimated_pts = None
+
+            if gp and gp > 0:
+                # Calculate PPG (fantasy points per game)
+                ppg = fantasy_points_total / gp
+
+                # Estimate weekly points for new player
+                avail_estimated_pts = ppg * avail_games_next_week
+
+                # Calculate differential if we have drop player's estimated points
+                if drop_player_est_pts is not None:
+                    weekly_pt_diff = avail_estimated_pts - drop_player_est_pts
+                else:
+                    # If we can't get drop player stats, just show add player estimate
+                    weekly_pt_diff = avail_estimated_pts
+
+            recommendations.append({
+                "player": avail_player,
+                "eff_gain": eff_gain,
+                "overall_rank": overall_rank,
+                "fpts": fantasy_points_total,
+                "ownership_pct": avail_player_data.get("ownership_pct", 0.0),
+                "stats": avail_player_data.get("stats", {}),
+                "games_played": gp,
+                "games_next_week": avail_games_next_week,
+                "ppg": ppg,
+                "est_week_pts": avail_estimated_pts,
+                "weekly_pt_diff": weekly_pt_diff
+            })
+
+            # Progress indicator
+            if (i + 1) % 10 == 0:
+                print(f"  Simulated {i + 1}/{len(available_players)} players...")
+
+        print(f"✓ Completed {len(available_players)} simulations\n")
+
+        # Sort recommendations by:
+        # 1. Efficiency gain (descending)
+        # 2. Overall rank (ascending - lower is better)
+        # 3. Total fantasy points (descending)
+        recommendations.sort(key=lambda r: (-r["eff_gain"], r["overall_rank"], -r["fpts"]))
+
+        # Display top N recommendations
+        top_n = min(args.top, len(recommendations))
+
+        # Show drop player info
+        if drop_player_ppg > 0:
+            drop_info = f"Drop: {drop_player.name} ({drop_player.team}, {'/'.join(drop_player.pos)}), {drop_games_next_week} G@ next week, {drop_player_ppg:.2f} FPTS/G"
+        else:
+            drop_info = f"Drop: {drop_player.name} ({drop_player.team}, {'/'.join(drop_player.pos)}), {drop_games_next_week} G@ next week"
+        print(f"=== Top {top_n} Free Agent Recommendations ({drop_info}) ===\n")
+
+        # Table header with new columns
+        print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<10} {'EFF':>5} {'GP':>4} {'G@':>4} {'OR#':>5} {'FPTS':>6} {'FPTS/G':>7} {'Est Week':>9} {'Est Δ':>7} {'OWN%':>6}")
+        print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 10} {'─' * 5} {'─' * 4} {'─' * 4} {'─' * 5} {'─' * 6} {'─' * 7} {'─' * 9} {'─' * 7} {'─' * 6}")
+
+        for rank, rec in enumerate(recommendations[:top_n], 1):
+            player = rec["player"]
+            eff_gain = rec["eff_gain"]
+            overall_rank = rec["overall_rank"]
+            fpts = rec["fpts"]
+            own_pct = rec["ownership_pct"]
+            gp = rec.get("games_played")
+            games_next_week = rec.get("games_next_week", 0)
+            ppg = rec.get("ppg")
+            est_week_pts = rec.get("est_week_pts")
+            weekly_pt_diff = rec.get("weekly_pt_diff")
+
+            # Color code efficiency gain
+            if eff_gain > 0:
+                eff_str = f"{Colors.GREEN}+{eff_gain}{Colors.RESET}"
+            elif eff_gain < 0:
+                eff_str = f"{Colors.RED}{eff_gain}{Colors.RESET}"
+            else:
+                eff_str = f"{Colors.YELLOW}{eff_gain}{Colors.RESET}"
+
+            # Format GP
+            gp_str = str(gp) if gp is not None else "?"
+
+            # Format games next week
+            g_at_str = str(games_next_week)
+
+            # Format FPTS/G
+            ppg_str = f"{ppg:.2f}" if ppg is not None else "N/A"
+
+            # Format estimated weekly points
+            est_week_str = f"{est_week_pts:.1f}" if est_week_pts is not None else "N/A"
+
+            # Color code weekly point differential
+            if weekly_pt_diff is not None:
+                if weekly_pt_diff > 0:
+                    est_diff_str = f"{Colors.GREEN}+{weekly_pt_diff:.1f}{Colors.RESET}"
+                elif weekly_pt_diff < 0:
+                    est_diff_str = f"{Colors.RED}{weekly_pt_diff:.1f}{Colors.RESET}"
+                else:
+                    est_diff_str = f"{Colors.YELLOW}{weekly_pt_diff:.1f}{Colors.RESET}"
+            else:
+                est_diff_str = "N/A"
+
+            pos_str = '/'.join(player.pos)
+            # Use pad_colored for columns with ANSI color codes
+            eff_padded = pad_colored(eff_str, 5, '>')
+            est_diff_padded = pad_colored(est_diff_str, 7, '>')
+            print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_str:<10} {eff_padded} {gp_str:>4} {g_at_str:>4} {overall_rank:>5} {fpts:>6.1f} {ppg_str:>7} {est_week_str:>9} {est_diff_padded} {own_pct:>5.1f}%")
+
+        # Print legend
+        print("\nLegend:")
+        print("  EFF      = Efficiency gain (additional games in lineup for the week)")
+        print("  GP       = Games played this season (from NHL API)")
+        print("  G@       = Games next week (for this player)")
+        print("  OR#      = Season rank (Yahoo's 2025 season performance rank, lower = better)")
+        print("  FPTS     = Total fantasy points this season")
+        print("  FPTS/G   = Fantasy points per game (FPTS ÷ GP)")
+        print("  Est Week = Estimated fantasy points for this week (FPTS/G × G@)")
+        print("  Est Δ    = Estimated weekly point differential (New Player Est Week - Drop Player Est Week)")
+        print("  OWN%     = Ownership percentage")
 
         return 0
 
