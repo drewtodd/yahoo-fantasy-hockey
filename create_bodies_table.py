@@ -1672,45 +1672,69 @@ def main() -> int:
                 # Get NHL stats for FPTS/G calculation
                 gp = nhl_api.get_games_played(p.name, p.team)
                 fpts = p.fpts if hasattr(p, 'fpts') else 0.0
+                overall_rank = 999  # Default fallback
 
-                # Try to fetch FPTS from Yahoo if not in player object
-                if fpts == 0.0:
-                    try:
-                        last_name = p.name.split()[-1]
-                        search_endpoint = (
-                            f"league/nhl.l.{config.league_id}/players;"
-                            f"search={last_name};"
-                            f"count=25;"
-                            f"out=stats"
-                        )
-                        search_data = client._api_request(search_endpoint)
+                # Fetch FPTS and OR# from Yahoo API
+                try:
+                    last_name = p.name.split()[-1]
+                    search_endpoint = (
+                        f"league/nhl.l.{config.league_id}/players;"
+                        f"search={last_name};"
+                        f"count=25;"
+                        f"out=stats,ranks"
+                    )
+                    search_data = client._api_request(search_endpoint)
 
-                        if "fantasy_content" in search_data and "league" in search_data["fantasy_content"]:
-                            league_data = search_data["fantasy_content"]["league"]
-                            for item in league_data:
-                                if isinstance(item, dict) and "players" in item:
-                                    players_data = item["players"]
-                                    for key, player_wrapper_data in players_data.items():
-                                        if key == "count":
-                                            continue
+                    if "fantasy_content" in search_data and "league" in search_data["fantasy_content"]:
+                        league_data = search_data["fantasy_content"]["league"]
+                        for item in league_data:
+                            if isinstance(item, dict) and "players" in item:
+                                players_data = item["players"]
+                                for key, player_wrapper_data in players_data.items():
+                                    if key == "count":
+                                        continue
 
-                                        player_wrapper = player_wrapper_data["player"]
-                                        player_info = player_wrapper[0]
+                                    player_wrapper = player_wrapper_data["player"]
+                                    player_info = player_wrapper[0]
 
-                                        name_obj = next((obj for obj in player_info if isinstance(obj, dict) and "name" in obj), None)
-                                        if name_obj and name_obj["name"]["full"].lower() == p.name.lower():
-                                            for elem in player_wrapper[1:]:
-                                                if isinstance(elem, dict) and "player_points" in elem:
-                                                    player_points = elem["player_points"]
-                                                    if "total" in player_points:
+                                    name_obj = next((obj for obj in player_info if isinstance(obj, dict) and "name" in obj), None)
+                                    if name_obj and name_obj["name"]["full"].lower() == p.name.lower():
+                                        # Extract FPTS if needed (from wrapper[2])
+                                        if fpts == 0.0 and len(player_wrapper) > 2:
+                                            player_points = player_wrapper[2].get("player_points", {})
+                                            if "total" in player_points:
+                                                try:
+                                                    fpts = float(player_points["total"])
+                                                except (ValueError, TypeError):
+                                                    fpts = 0.0
+
+                                        # Extract overall rank from wrapper[3] (prefer current season S/2025)
+                                        if len(player_wrapper) > 3 and isinstance(player_wrapper[3], dict):
+                                            player_ranks = player_wrapper[3].get("player_ranks", [])
+                                            # Find current season rank
+                                            for rank_entry in player_ranks:
+                                                if isinstance(rank_entry, dict) and "player_rank" in rank_entry:
+                                                    rank_obj = rank_entry["player_rank"]
+                                                    if rank_obj.get("rank_type") == "S" and rank_obj.get("rank_season") == "2025":
                                                         try:
-                                                            fpts = float(player_points["total"])
+                                                            overall_rank = int(rank_obj.get("rank_value", 999))
                                                         except (ValueError, TypeError):
-                                                            fpts = 0.0
+                                                            overall_rank = 999
                                                         break
-                                            break
-                    except Exception:
-                        pass  # Use 0.0 if we can't fetch
+                                            # Fallback to OR (preseason rank) if no current season rank found
+                                            if overall_rank == 999:
+                                                for rank_entry in player_ranks:
+                                                    if isinstance(rank_entry, dict) and "player_rank" in rank_entry:
+                                                        rank_obj = rank_entry["player_rank"]
+                                                        if rank_obj.get("rank_type") == "OR":
+                                                            try:
+                                                                overall_rank = int(rank_obj.get("rank_value", 999))
+                                                            except (ValueError, TypeError):
+                                                                overall_rank = 999
+                                                            break
+                                        break
+                except Exception:
+                    pass  # Use defaults if we can't fetch
 
                 if gp and gp > 0 and fpts > 0:
                     fpts_per_game = fpts / gp
@@ -1721,6 +1745,7 @@ def main() -> int:
                         "fpts_per_game": fpts_per_game,
                         "gp": gp,
                         "fpts": fpts,
+                        "overall_rank": overall_rank,
                         "position_count": pos_count,
                         "position_display": pos_display
                     })
@@ -1748,8 +1773,8 @@ def main() -> int:
             best_pickup_fpts_g = streaming_candidates[0]["fpts_per_game"]
 
             print(f"\nYOUR DROP CANDIDATES (not playing on {date_str}, sorted by worst FPTS/G):\n")
-            print("RANK   PLAYER                    TEAM  POS              GP   FPTS  FPTS/G  Est Δ")
-            print("────── ───────────────────────── ───── ─────────────── ──── ────── ─────── ───────")
+            print("RANK   PLAYER                    TEAM  POS              GP  OR#   FPTS  FPTS/G  Est Δ")
+            print("────── ───────────────────────── ───── ─────────────── ──── ───── ────── ─────── ───────")
 
             for rank, candidate in enumerate(drop_candidates[:top_n], 1):
                 player = candidate["player"]
@@ -1765,7 +1790,7 @@ def main() -> int:
 
                 est_delta_padded = pad_colored(est_delta_str, 7, '>')
 
-                print(f"{rank:<6} {player.name:<25} {player.team:<5} {candidate['position_display']:<15} {candidate['gp']:>4} {candidate['fpts']:>6.1f} {candidate['fpts_per_game']:>7.2f} {est_delta_padded}")
+                print(f"{rank:<6} {player.name:<25} {player.team:<5} {candidate['position_display']:<15} {candidate['gp']:>4} {candidate['overall_rank']:>5} {candidate['fpts']:>6.1f} {candidate['fpts_per_game']:>7.2f} {est_delta_padded}")
         else:
             print(f"\nAll your players are already playing on {date_str}")
 
