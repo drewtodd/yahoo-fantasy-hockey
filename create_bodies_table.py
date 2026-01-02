@@ -1286,25 +1286,20 @@ def main() -> int:
 
             # Calculate fantasy points per game
             stats = avail_player_data.get("stats", {})
-            # Stat ID 0 is Games Played (GP)
-            # We need to identify fantasy points stat ID from Yahoo's stat mapping
-            # For now, we'll use a simplified approach - calculate from available stats
-            # This may need adjustment based on your league's stat configuration
 
-            # Get games played
-            games_played = float(stats.get("0", 0)) if "0" in stats else 0
-
-            # Calculate total fantasy points from available stats
-            # This is a simplified calculation - adjust based on your league scoring
-            fantasy_points = 0.0
-            for stat_id, value in stats.items():
+            # Get games played (stat_id "0")
+            games_played = 0
+            if "0" in stats:
                 try:
-                    fantasy_points += float(value)
+                    games_played = int(stats["0"])
                 except (ValueError, TypeError):
-                    pass
+                    games_played = 0
+
+            # Get total fantasy points (Yahoo provides this directly)
+            fantasy_points_total = avail_player_data.get("fantasy_points_total", 0.0)
 
             # Calculate per-game average
-            fpg = (fantasy_points / games_played) if games_played > 0 else 0.0
+            fpg = (fantasy_points_total / games_played) if games_played > 0 else 0.0
 
             recommendations.append({
                 "player": avail_player,

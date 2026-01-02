@@ -501,7 +501,7 @@ class YahooClient:
 
         Returns:
             List of player dictionaries with name, team, positions, player_id,
-            ownership percentage, and stats
+            ownership percentage, stats, and fantasy_points_total
         """
         league_id = league_id or config.league_id
 
@@ -591,8 +591,10 @@ class YahooClient:
                                 ownership_pct = float(pct_obj["value"])
                                 break
 
-                # Parse stats from third array element
+                # Parse stats and fantasy points from third array element
+                fantasy_points_total = 0.0
                 if len(player_wrapper) > 2 and isinstance(player_wrapper[2], dict):
+                    # Extract individual stats
                     player_stats = player_wrapper[2].get("player_stats", {})
                     if "stats" in player_stats:
                         stats_list = player_stats["stats"]
@@ -605,6 +607,14 @@ class YahooClient:
                                 if stat_id and value:
                                     stats_dict[stat_id] = value
 
+                    # Extract total fantasy points (provided directly by Yahoo)
+                    player_points = player_wrapper[2].get("player_points", {})
+                    if "total" in player_points:
+                        try:
+                            fantasy_points_total = float(player_points["total"])
+                        except (ValueError, TypeError):
+                            fantasy_points_total = 0.0
+
                 if player_id and name and team_abbr:
                     players.append({
                         "player_id": player_id,
@@ -612,7 +622,8 @@ class YahooClient:
                         "team": team_abbr,
                         "pos": positions,
                         "ownership_pct": ownership_pct,
-                        "stats": stats_dict
+                        "stats": stats_dict,
+                        "fantasy_points_total": fantasy_points_total
                     })
 
             return players
