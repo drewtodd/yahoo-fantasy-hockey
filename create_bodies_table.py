@@ -1699,39 +1699,41 @@ def main() -> int:
 
                                     name_obj = next((obj for obj in player_info if isinstance(obj, dict) and "name" in obj), None)
                                     if name_obj and name_obj["name"]["full"].lower() == p.name.lower():
-                                        # Extract FPTS if needed (from wrapper[2])
-                                        if fpts == 0.0 and len(player_wrapper) > 2:
-                                            player_points = player_wrapper[2].get("player_points", {})
-                                            if "total" in player_points:
-                                                try:
-                                                    fpts = float(player_points["total"])
-                                                except (ValueError, TypeError):
-                                                    fpts = 0.0
-
-                                        # Extract overall rank from wrapper[3] (prefer current season S/2025)
-                                        if len(player_wrapper) > 3 and isinstance(player_wrapper[3], dict):
-                                            player_ranks = player_wrapper[3].get("player_ranks", [])
-                                            # Find current season rank
-                                            for rank_entry in player_ranks:
-                                                if isinstance(rank_entry, dict) and "player_rank" in rank_entry:
-                                                    rank_obj = rank_entry["player_rank"]
-                                                    if rank_obj.get("rank_type") == "S" and rank_obj.get("rank_season") == "2025":
+                                        # Extract FPTS by iterating through all wrapper elements
+                                        if fpts == 0.0:
+                                            for elem in player_wrapper[1:]:
+                                                if isinstance(elem, dict) and "player_points" in elem:
+                                                    player_points = elem["player_points"]
+                                                    if "total" in player_points:
                                                         try:
-                                                            overall_rank = int(rank_obj.get("rank_value", 999))
+                                                            fpts = float(player_points["total"])
                                                         except (ValueError, TypeError):
-                                                            overall_rank = 999
+                                                            fpts = 0.0
                                                         break
-                                            # Fallback to OR (preseason rank) if no current season rank found
-                                            if overall_rank == 999:
-                                                for rank_entry in player_ranks:
-                                                    if isinstance(rank_entry, dict) and "player_rank" in rank_entry:
-                                                        rank_obj = rank_entry["player_rank"]
-                                                        if rank_obj.get("rank_type") == "OR":
-                                                            try:
-                                                                overall_rank = int(rank_obj.get("rank_value", 999))
-                                                            except (ValueError, TypeError):
-                                                                overall_rank = 999
-                                                            break
+
+                                        # Extract overall rank by iterating through all wrapper elements
+                                        for elem in player_wrapper[1:]:
+                                            if isinstance(elem, dict) and "player_stats" in elem:
+                                                stats_obj = elem["player_stats"]
+                                                if "stats" in stats_obj:
+                                                    for stat_item in stats_obj["stats"]:
+                                                        if isinstance(stat_item, dict) and "stat" in stat_item:
+                                                            stat = stat_item["stat"]
+                                                            if "rank" in stat:
+                                                                rank_obj = stat["rank"]
+                                                                # Prefer current season rank (S with season 2025)
+                                                                if rank_obj.get("rank_type") == "S" and rank_obj.get("rank_season") == "2025":
+                                                                    try:
+                                                                        overall_rank = int(rank_obj.get("rank_value", 999))
+                                                                    except (ValueError, TypeError):
+                                                                        overall_rank = 999
+                                                                    break
+                                                                # Fallback to OR (preseason rank)
+                                                                elif rank_obj.get("rank_type") == "OR" and overall_rank == 999:
+                                                                    try:
+                                                                        overall_rank = int(rank_obj.get("rank_value", 999))
+                                                                    except (ValueError, TypeError):
+                                                                        overall_rank = 999
                                         break
                 except Exception:
                     pass  # Use defaults if we can't fetch
