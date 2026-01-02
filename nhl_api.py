@@ -115,9 +115,10 @@ def fetch_season_stats(season: str = "20252026", debug: bool = False, force_refr
     """
     global _nhl_stats_cache, _cache_timestamp
 
+    current_time = time.time()
+
     # Check in-memory cache first
     if not force_refresh:
-        current_time = time.time()
         if _nhl_stats_cache and _cache_timestamp and (current_time - _cache_timestamp) < _cache_ttl:
             if debug:
                 age = current_time - _cache_timestamp

@@ -543,6 +543,11 @@ def main() -> int:
         help="Fetch roster from Yahoo and save to roster.yml, then exit.",
     )
     ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Force refresh all caches (NHL stats, free agents, schedules). Ignores cache TTL.",
+    )
+    ap.add_argument(
         "--compare-team",
         type=str,
         metavar="TEAM_ID",
@@ -583,6 +588,12 @@ def main() -> int:
             args.export = "markdown"
         elif args.export == "cp":
             args.export = "clipboard"
+
+    # Clear caches if --force is set
+    if args.force:
+        global _nhl_schedule_cache
+        _nhl_schedule_cache.clear()
+        print("✓ Force refresh enabled - clearing all caches")
 
     # Validate comparison mode
     if args.compare_team:
@@ -753,7 +764,7 @@ def main() -> int:
             if args.recommend_add:
                 print("Fetching top 100 available free agents...")
                 try:
-                    available_players = client.fetch_available_players(count=100)
+                    available_players = client.fetch_available_players(count=100, use_cache=not args.force)
                     # Filter out goalies
                     available_players = [p for p in available_players if 'G' not in p['pos']]
                     # Filter out injured players (IR, Out, Day-to-Day)
@@ -1356,7 +1367,7 @@ def main() -> int:
 
         # Get NHL stats for calculating PPG and weekly estimates
         print("Fetching NHL stats for PPG calculations...")
-        nhl_api.fetch_season_stats()  # Pre-fetch and cache NHL stats
+        nhl_api.fetch_season_stats(force_refresh=args.force)  # Pre-fetch and cache NHL stats
 
         # Get games next week for drop player
         drop_p_games = build_player_game_matrix([drop_player], week_start)
@@ -1610,7 +1621,7 @@ def main() -> int:
 
         # Fetch available players (limit to top 100)
         print("Fetching available free agents...")
-        available_players = client.fetch_available_players(count=100)
+        available_players = client.fetch_available_players(count=100, use_cache=not args.force)
 
         # Filter out goalies
         available_players = [p for p in available_players if 'G' not in p['pos']]
@@ -1625,7 +1636,7 @@ def main() -> int:
 
         # Pre-fetch NHL stats for GP calculations
         print("Fetching NHL stats for FPTS/G calculations...")
-        nhl_api.fetch_season_stats()
+        nhl_api.fetch_season_stats(force_refresh=args.force)
 
         # Build single-date game matrix for available players
         available_player_objs = [
