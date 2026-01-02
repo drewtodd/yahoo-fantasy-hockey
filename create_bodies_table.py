@@ -1734,7 +1734,7 @@ def main() -> int:
 
         # Show top streaming options
         top_n = min(args.top, len(streaming_candidates))
-        print("TOP STREAMING OPTIONS (players with games today):\n")
+        print(f"TOP STREAMING OPTIONS (players with games on {date_str}):\n")
         print("RANK   PLAYER                    TEAM  POS           GP  OR#   FPTS  FPTS/G  Est Game   OWN%")
         print("────── ───────────────────────── ───── ──────────── ──── ───── ────── ─────── ───────── ──────")
 
@@ -1747,7 +1747,7 @@ def main() -> int:
         if len(drop_candidates) > 0:
             best_pickup_fpts_g = streaming_candidates[0]["fpts_per_game"]
 
-            print("\nYOUR DROP CANDIDATES (not playing today, sorted by worst FPTS/G):\n")
+            print(f"\nYOUR DROP CANDIDATES (not playing on {date_str}, sorted by worst FPTS/G):\n")
             print("RANK   PLAYER                    TEAM  POS              GP   FPTS  FPTS/G  Est Δ")
             print("────── ───────────────────────── ───── ─────────────── ──── ────── ─────── ───────")
 
