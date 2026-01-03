@@ -1367,8 +1367,9 @@ def main() -> int:
             current_total_filled += len(current_assignment)
 
             # Count if drop player was assigned to an active slot this day
-            for slot_pos, assigned_p in current_assignment.items():
-                if assigned_p.name == drop_player.name:
+            # current_assignment maps slot_idx -> player_idx (within current_active)
+            for slot_idx, player_idx in current_assignment.items():
+                if current_active[player_idx].name == drop_player.name:
                     drop_player_actual_slots += 1
                     break  # Player can only fill one slot per day
 
