@@ -1358,12 +1358,19 @@ def main() -> int:
         # Build current roster game matrix
         current_p_games = build_player_game_matrix(players, week_start)
 
-        # Calculate current roster efficiency
+        # Calculate current roster efficiency AND count drop player's actual slot fills
         current_total_filled = 0
+        drop_player_actual_slots = 0  # Count how many times drop player is assigned to active slot
         for day_date in week_dates:
             current_active = [p for p in players if day_date in current_p_games.get(p.name, set())]
             current_assignment = solve_daily_assignment(current_active, SLOTS)
             current_total_filled += len(current_assignment)
+
+            # Count if drop player was assigned to an active slot this day
+            for slot_pos, assigned_p in current_assignment.items():
+                if assigned_p.name == drop_player.name:
+                    drop_player_actual_slots += 1
+                    break  # Player can only fill one slot per day
 
         # Get NHL stats for calculating PPG and weekly estimates
         print("Fetching NHL stats for PPG calculations...")
@@ -1429,13 +1436,16 @@ def main() -> int:
         except Exception as e:
             print(f"  Warning: Could not fetch drop player stats from Yahoo API: {e}")
 
-        # Calculate estimated weekly points for drop player
+        # Calculate estimated weekly points for drop player BASED ON ACTUAL SLOT FILLS
+        # This is critical: we use drop_player_actual_slots, NOT drop_games_next_week
+        # because the drop player might sit on bench for some/all games
         if drop_player_gp and drop_player_gp > 0 and drop_player_fpts > 0:
             drop_player_ppg = drop_player_fpts / drop_player_gp
-            drop_player_est_pts = drop_player_ppg * drop_games_next_week
-            print(f"  Drop player info: {drop_player_fpts:.1f} FPTS, {drop_player_gp} GP, {drop_player_ppg:.2f} FPTS/G, {drop_games_next_week} G@ next week → Est {drop_player_est_pts:.1f} pts")
+            drop_player_est_pts = drop_player_ppg * drop_player_actual_slots
+            print(f"  Drop player info: {drop_player_fpts:.1f} FPTS, {drop_player_gp} GP, {drop_player_ppg:.2f} FPTS/G")
+            print(f"  Drop player lineup: {drop_player_actual_slots} active slots (out of {drop_games_next_week} games) → Est {drop_player_est_pts:.1f} pts")
         else:
-            print(f"  Drop player info: {drop_games_next_week} G@ next week (stats unavailable)")
+            print(f"  Drop player info: {drop_player_actual_slots} active slots out of {drop_games_next_week} games (stats unavailable)")
 
         # Run simulations for each available player
         print(f"Simulating swaps with {len(available_players)} available players...")
