@@ -105,6 +105,8 @@ python create_bodies_table.py -y -w 4 -c -s
 #### Advanced Options (Require Yahoo API)
 | Option | Description |
 |--------|-------------|
+| `--weekly-summary` | Comprehensive Monday morning report (bodies table + drop candidates + top FAs) |
+| `--drop-candidates` | Show underutilized roster players with low slot utilization for the week |
 | `--available-fas YYYY-MM-DD` | Find best available free agents playing on specific date with drop recommendations |
 | `--recommend-add` | Show top free agent recommendations ranked by weekly efficiency gain |
 | `--compare-team TEAM_ID` | Compare your roster efficiency against another team |
@@ -130,6 +132,14 @@ python create_bodies_table.py -e markdown -o week.md
 
 #### Advanced Features
 ```bash
+# Monday morning workflow report (RECOMMENDED!)
+python create_bodies_table.py --weekly-summary
+# Shows: Complete weekly report with roster saturation, drop candidates, and top FAs
+
+# Identify underutilized players on your roster
+python create_bodies_table.py --drop-candidates
+# Shows: Players benched despite having games (wasted bench games)
+
 # Find streaming pickups for a specific date
 python create_bodies_table.py --available-fas 2026-01-05
 # Shows: Best FAs playing that day + which rostered players to drop
@@ -152,6 +162,66 @@ python create_bodies_table.py --available-fas 2026-01-05 --force
 ```
 
 ## Advanced Features Explained
+
+### Weekly Summary (`--weekly-summary`)
+
+Complete Monday morning workflow report combining three essential sections into one comprehensive view.
+
+**Sections included:**
+1. **Roster Saturation** - Bodies table showing lineup coverage for the week with efficiency percentages
+2. **Drop Candidates** - Top 5 underutilized players with wasted bench games
+3. **Top Free Agent Targets** - Top 5 available FAs ranked by efficiency gain potential
+
+**Perfect for:**
+- Monday morning waiver decisions
+- Quick weekly roster assessment
+- Identifying optimization opportunities
+
+**Output highlights:**
+- Color-coded efficiency metrics (green = good, yellow = moderate, red = critical)
+- Utilization percentages (Slots ÷ Games)
+- Wasted games counter for drop candidates
+- Efficiency gain projections for free agents
+
+**Example workflow:**
+```bash
+# Sunday night or Monday morning
+python create_bodies_table.py --weekly-summary
+
+# Review the three sections:
+# 1. Check roster saturation - where are the gaps?
+# 2. Identify drop candidates - who's sitting on the bench?
+# 3. Evaluate top FAs - what's the best add for maximum impact?
+```
+
+### Drop Candidates (`--drop-candidates`)
+
+Identify roster players with low slot utilization for the upcoming week.
+
+**How it works:**
+1. Runs the lineup optimizer for each day of the week
+2. Counts actual slot assignments for each player
+3. Compares slot fills vs. games played
+4. Calculates utilization percentage and wasted bench games
+
+**Output columns:**
+- **PLAYER** - Player name
+- **TEAM** - Team abbreviation
+- **POS** - Position eligibility (shows flexibility, e.g., "C/LW (2)")
+- **FPTS/G** - Fantasy points per game (season average)
+- **Games** - Total games scheduled this week
+- **Slots** - Actual roster slot fills (from optimizer)
+- **Util%** - Utilization percentage (Slots ÷ Games × 100)
+- **Wasted** - Bench games (Games - Slots)
+
+**Sorting:**
+- Primary: Wasted games (descending) - players with most bench time first
+- Secondary: FPTS/G (ascending) - worst performers among ties
+
+**Use cases:**
+- Identify candidates for drops when picking up streamers
+- Find roster inefficiencies before making waiver claims
+- Optimize roster composition for better weekly coverage
 
 ### Streaming Pickups (`--available-fas`)
 
