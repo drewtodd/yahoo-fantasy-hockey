@@ -4,6 +4,7 @@ A tool to optimize your Yahoo Fantasy Hockey lineup by visualizing roster slot c
 
 ## Features
 
+### Core Analysis
 - **Weekly bodies table** - Visualize filled roster slots (Mon-Sun) with position-aware optimization
 - **Single-day analysis** - Check lineup coverage for any specific date
 - **Multi-week projections** - Forecast coverage for multiple consecutive weeks
@@ -11,6 +12,13 @@ A tool to optimize your Yahoo Fantasy Hockey lineup by visualizing roster slot c
 - **Color-coded output** - Green for filled, yellow for moderate gaps, red for critical issues
 - **Export options** - CSV, Markdown, or clipboard for easy sharing
 - **Flexible date selection** - Analyze any week by providing any date within it
+
+### Advanced Features
+- **Streaming pickups (`--available-fas`)** - Find best available free agents playing on a specific date with smart drop recommendations
+- **Free agent recommendations (`--recommend-add`)** - Discover top weekly efficiency gains from available players
+- **Team comparisons (`--compare-team`)** - Benchmark your roster efficiency against league opponents
+- **Player swap simulation (`--player-swap`)** - Preview the impact of add/drop transactions before making them
+- **Force refresh (`--force`)** - Override caches to get the latest stats and schedules
 
 ## Installation
 
@@ -80,6 +88,7 @@ python create_bodies_table.py -y -w 4 -c -s
 
 ### Command-line Options
 
+#### Core Options
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--roster FILE` | `-r` | Path to roster YAML (default: roster.yml) |
@@ -90,10 +99,21 @@ python create_bodies_table.py -y -w 4 -c -s
 | `--export FORMAT` | `-e` | Export as csv, markdown, or clipboard |
 | `--export-file FILE` | `-o` | Output file for export (optional) |
 | `--separate-weeks` | `-s` | Show each week in separate table |
-| `--yahoo` | `-y` | Fetch from Yahoo Fantasy API |
+| `--local` | `-l` | Use local roster.yml instead of Yahoo API |
+| `--sync` | | Fetch roster from Yahoo and save to roster.yml |
+
+#### Advanced Options (Require Yahoo API)
+| Option | Description |
+|--------|-------------|
+| `--available-fas YYYY-MM-DD` | Find best available free agents playing on specific date with drop recommendations |
+| `--recommend-add` | Show top free agent recommendations ranked by weekly efficiency gain |
+| `--compare-team TEAM_ID` | Compare your roster efficiency against another team |
+| `--player-swap DROP_ID ADD_ID` | Simulate the impact of swapping two players |
+| `--force` | Force refresh all caches (NHL stats, free agents, schedules) |
 
 ### Examples
 
+#### Basic Usage
 ```bash
 # Current week with colors
 python create_bodies_table.py -c
@@ -104,15 +124,92 @@ python create_bodies_table.py -d 2025-01-15 -w 4
 # Today's lineup only
 python create_bodies_table.py -D
 
-# Yahoo API with separate week tables
-python create_bodies_table.py -y -w 3 -s -c
-
 # Export to Markdown
-python create_bodies_table.py -y -e markdown -o week.md
-
-# Copy to clipboard
-python create_bodies_table.py -e clipboard
+python create_bodies_table.py -e markdown -o week.md
 ```
+
+#### Advanced Features
+```bash
+# Find streaming pickups for a specific date
+python create_bodies_table.py --available-fas 2026-01-05
+# Shows: Best FAs playing that day + which rostered players to drop
+
+# Get weekly free agent recommendations
+python create_bodies_table.py --recommend-add
+# Shows: Top FAs ranked by efficiency gain with weekly projections
+
+# Compare efficiency against another team
+python create_bodies_table.py --compare-team 2
+# Shows: Side-by-side roster efficiency comparison
+
+# Simulate a player swap before executing
+python create_bodies_table.py --player-swap 12345 67890
+# Shows: Projected impact of dropping player 12345 and adding 67890
+
+# Force refresh all data (ignore caches)
+python create_bodies_table.py --available-fas 2026-01-05 --force
+# Useful when you need the latest stats/rankings
+```
+
+## Advanced Features Explained
+
+### Streaming Pickups (`--available-fas`)
+
+Find the best available free agents playing on a specific date for same-day streaming pickups.
+
+**Output includes:**
+- **Top streaming options**: Available FAs ranked by FPTS/G (fantasy points per game), then OR# (overall rank)
+- **Drop candidates**: Your rostered players NOT playing that date, sorted by worst FPTS/G
+- **Position flexibility**: Shows multi-position eligibility (e.g., "C/LW/RW (3)")
+- **Est Δ**: Expected point differential for each recommended swap (color-coded: green = positive, red = negative)
+
+**Example output:**
+```
+TOP STREAMING OPTIONS (players with games on Sunday, Jan 04, 2026):
+RANK  PLAYER           TEAM  POS     GP  OR#  FPTS  FPTS/G  Est Game  OWN%
+1     Brock Nelson     COL   C       39   67  294.4   7.55     7.55   59%
+2     Juraj Slafkovský MTL   LW/RW   40   64  299.0   7.47     7.47   85%
+
+YOUR DROP CANDIDATES (not playing on Sunday, Jan 04, 2026):
+RANK  PLAYER           TEAM  POS       GP  OR#  FPTS  FPTS/G  Est Δ
+1     Roman Josi       NSH   D         28  999  183.7   6.56   +0.99
+2     Elias Pettersson VAN   C/LW (2)  31  999  212.9   6.87   +0.68
+```
+
+### Free Agent Recommendations (`--recommend-add`)
+
+Discover the best available free agents based on weekly efficiency gain potential.
+
+**How it works:**
+1. Analyzes your roster's schedule for the upcoming week
+2. Fetches top 100 available FAs (excludes goalies and injured players)
+3. Calculates each FA's projected weekly efficiency gain
+4. Ranks by: (1) Efficiency gain, (2) Games next week, (3) Fantasy points per game
+
+**Efficiency gain formula:**
+```
+Gain = (FA Games Next Week × FA FPTS/G) - (Average Roster Player Games × FPTS/G)
+```
+
+### Team Comparison (`--compare-team`)
+
+Benchmark your roster's efficiency against any league opponent.
+
+**Shows:**
+- Side-by-side bodies tables for both teams
+- Total filled slots comparison
+- Efficiency percentage for each team
+- Identifies scheduling advantages
+
+### Player Swap Simulation (`--player-swap`)
+
+Preview the exact impact of an add/drop transaction before executing it.
+
+**Output includes:**
+- Current roster efficiency vs. projected efficiency after swap
+- Games played comparison (drop vs. add)
+- Weekly slot fill differential
+- Color-coded impact summary
 
 ## Roster YAML Format
 
@@ -135,10 +232,26 @@ players:
 
 ## How It Works
 
+### Core Algorithm
 1. **Fetch NHL schedules** - Uses NHL public API to get game schedules per team
 2. **Position-aware optimization** - OR-Tools CP-SAT solver assigns players to maximize filled slots
 3. **Constraint satisfaction** - Ensures each slot gets at most one player, each player fills at most one slot
 4. **Multi-week projection** - Repeats process across consecutive weeks
+
+### Advanced Features Integration
+- **NHL Stats API** - Fetches games played (GP) for accurate FPTS/G calculations
+- **Yahoo Free Agents API** - Retrieves top 100 FAs with ownership %, ranks, and fantasy points
+- **Single-date game matrix** - Optimized lookup for streaming pickup schedule detection
+- **Position flexibility scoring** - Identifies multi-position players for drop candidate evaluation
+
+## Caching
+
+To minimize API calls and improve performance, the tool caches data:
+
+- **NHL Stats Cache**: `.cache/nhl_stats.json` - 24-hour TTL (825 NHL players)
+- **Yahoo FA Cache**: `.cache/yahoo_free_agents.json` - 30-minute TTL (top 100 FAs)
+- **In-memory schedule cache**: Team game schedules cached per week
+- **Force refresh**: Use `--force` to bypass all caches and fetch fresh data
 
 ## Color Coding
 
@@ -146,6 +259,10 @@ When using `--color`:
 - **Green (X)** - Filled slot
 - **Yellow (empty)** - 2-3 empty slots for this position (moderate concern)
 - **Red (empty)** - 4+ empty slots for this position (critical gap)
+
+In streaming pickups and recommendations:
+- **Green Est Δ** - Positive point differential (good swap)
+- **Red Est Δ** - Negative point differential (bad swap)
 
 ## OAuth & Security
 
@@ -156,12 +273,21 @@ When using `--color`:
 
 ## Files
 
-- `create_bodies_table.py` - Main script
+### Core Files
+- `create_bodies_table.py` - Main script with all features
 - `yahoo_client.py` - Yahoo OAuth and API wrapper
+- `nhl_api.py` - NHL stats API client with caching
 - `config.py` - Configuration management
 - `roster.yml` - Manual roster input (optional)
-- `.env` - Yahoo API credentials (gitignored)
-- `.yahoo_tokens.json` - OAuth tokens (gitignored)
+
+### Configuration (gitignored)
+- `.env` - Yahoo API credentials
+- `.yahoo_tokens.json` - OAuth tokens
+- `.cache/` - NHL stats and free agent caches
+
+### Documentation
+- `README.md` - This file
+- `STREAMING_FEATURE_PLAN.md` - Detailed implementation plan for --available-fas
 
 ## License
 
