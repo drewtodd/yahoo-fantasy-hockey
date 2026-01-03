@@ -1619,6 +1619,11 @@ def main() -> int:
             for p in roster_data
         ]
 
+        # Fetch stats and ranks for all roster players
+        print("Fetching player stats and ranks...")
+        player_names = [p.name for p in players]
+        roster_data_map = client.fetch_player_ranks(player_names, include_stats=True)
+
         # Fetch available players (limit to top 100)
         print("Fetching available free agents...")
         available_players = client.fetch_available_players(count=100, use_cache=not args.force)
@@ -1682,72 +1687,11 @@ def main() -> int:
             if not roster_games.get(p.name, False):
                 # Get NHL stats for FPTS/G calculation
                 gp = nhl_api.get_games_played(p.name, p.team)
-                fpts = p.fpts if hasattr(p, 'fpts') else 0.0
-                overall_rank = 999  # Default fallback
 
-                # Fetch FPTS and OR# from Yahoo API
-                try:
-                    last_name = p.name.split()[-1]
-                    search_endpoint = (
-                        f"league/nhl.l.{config.league_id}/players;"
-                        f"search={last_name};"
-                        f"count=25;"
-                        f"out=stats,ranks"
-                    )
-                    search_data = client._api_request(search_endpoint)
-
-                    if "fantasy_content" in search_data and "league" in search_data["fantasy_content"]:
-                        league_data = search_data["fantasy_content"]["league"]
-                        for item in league_data:
-                            if isinstance(item, dict) and "players" in item:
-                                players_data = item["players"]
-                                for key, player_wrapper_data in players_data.items():
-                                    if key == "count":
-                                        continue
-
-                                    player_wrapper = player_wrapper_data["player"]
-                                    player_info = player_wrapper[0]
-
-                                    name_obj = next((obj for obj in player_info if isinstance(obj, dict) and "name" in obj), None)
-                                    if name_obj and name_obj["name"]["full"].lower() == p.name.lower():
-                                        # Extract FPTS by iterating through all wrapper elements
-                                        if fpts == 0.0:
-                                            for elem in player_wrapper[1:]:
-                                                if isinstance(elem, dict) and "player_points" in elem:
-                                                    player_points = elem["player_points"]
-                                                    if "total" in player_points:
-                                                        try:
-                                                            fpts = float(player_points["total"])
-                                                        except (ValueError, TypeError):
-                                                            fpts = 0.0
-                                                        break
-
-                                        # Extract overall rank by iterating through all wrapper elements
-                                        for elem in player_wrapper[1:]:
-                                            if isinstance(elem, dict) and "player_stats" in elem:
-                                                stats_obj = elem["player_stats"]
-                                                if "stats" in stats_obj:
-                                                    for stat_item in stats_obj["stats"]:
-                                                        if isinstance(stat_item, dict) and "stat" in stat_item:
-                                                            stat = stat_item["stat"]
-                                                            if "rank" in stat:
-                                                                rank_obj = stat["rank"]
-                                                                # Prefer current season rank (S with season 2025)
-                                                                if rank_obj.get("rank_type") == "S" and rank_obj.get("rank_season") == "2025":
-                                                                    try:
-                                                                        overall_rank = int(rank_obj.get("rank_value", 999))
-                                                                    except (ValueError, TypeError):
-                                                                        overall_rank = 999
-                                                                    break
-                                                                # Fallback to OR (preseason rank)
-                                                                elif rank_obj.get("rank_type") == "OR" and overall_rank == 999:
-                                                                    try:
-                                                                        overall_rank = int(rank_obj.get("rank_value", 999))
-                                                                    except (ValueError, TypeError):
-                                                                        overall_rank = 999
-                                        break
-                except Exception:
-                    pass  # Use defaults if we can't fetch
+                # Get FPTS and overall rank from roster data (already fetched)
+                player_data = roster_data_map.get(p.name, {"rank": 999, "fpts": 0.0})
+                fpts = player_data["fpts"]
+                overall_rank = player_data["rank"]
 
                 if gp and gp > 0 and fpts > 0:
                     fpts_per_game = fpts / gp
