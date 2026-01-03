@@ -586,6 +586,13 @@ def main() -> int:
         help="Show underutilized roster players for the upcoming week. Identifies players "
              "with low slot utilization (benched despite having games). Requires Yahoo API.",
     )
+    ap.add_argument(
+        "--weekly-summary",
+        action="store_true",
+        help="Comprehensive weekly report combining bodies table, drop candidates, and "
+             "top free agent recommendations. Perfect for Monday morning waiver decisions. "
+             "Requires Yahoo API.",
+    )
     args = ap.parse_args()
 
     # Normalize export aliases
@@ -687,6 +694,32 @@ def main() -> int:
             print("Error: Cannot use --drop-candidates and --available-fas together", file=sys.stderr)
             return 2
         # Force single-week analysis in drop candidates mode
+        args.weeks = 1
+
+    # Validate weekly summary mode
+    if args.weekly_summary:
+        if args.local:
+            print("Error: --weekly-summary requires Yahoo API (cannot use with --local)", file=sys.stderr)
+            return 2
+        if args.day:
+            print("Error: --weekly-summary only works with week mode (cannot use with --day)", file=sys.stderr)
+            return 2
+        if args.recommend_add:
+            print("Error: Cannot use --weekly-summary and --recommend-add together", file=sys.stderr)
+            return 2
+        if args.compare_team:
+            print("Error: Cannot use --weekly-summary and --compare-team together", file=sys.stderr)
+            return 2
+        if args.player_swap:
+            print("Error: Cannot use --weekly-summary and --player-swap together", file=sys.stderr)
+            return 2
+        if args.available_fas:
+            print("Error: Cannot use --weekly-summary and --available-fas together", file=sys.stderr)
+            return 2
+        if args.drop_candidates:
+            print("Error: Cannot use --weekly-summary and --drop-candidates together", file=sys.stderr)
+            return 2
+        # Force single-week analysis
         args.weeks = 1
 
     tz = gettz("America/Los_Angeles")
@@ -1796,6 +1829,370 @@ def main() -> int:
         print("  Util%: Green ≥80%, Yellow 50-79%, Red <50%")
         print("  Wasted: Green = 0, Yellow 1-2, Red ≥3")
         print("\nDrop Priority: High 'Wasted' + Low 'FPTS/G' = Prime drop candidate")
+
+        return 0
+
+    # Handle --weekly-summary mode (comprehensive Monday morning report)
+    if args.weekly_summary:
+        from yahoo_client import YahooClient
+        from config import config
+
+        # Initialize Yahoo client
+        client = YahooClient()
+        client.authorize()
+
+        # Determine the week to analyze
+        if args.date:
+            provided_date = dt.date.fromisoformat(args.date)
+            week_start = week_start_monday(provided_date)
+        else:
+            week_start = week_start_monday(today)
+
+        week_end = week_start + dt.timedelta(days=6)
+        week_dates = daterange(week_start, 7)
+
+        print("=" * 80)
+        print(f"WEEKLY SUMMARY REPORT")
+        print(f"Week: {week_start.isoformat()} → {week_end.isoformat()}")
+        print("=" * 80)
+        print()
+
+        # Fetch roster and league settings
+        print("Fetching roster from Yahoo API...")
+        roster_data = client.fetch_team_roster()
+        league_settings = client.fetch_league_settings()
+
+        # Use league settings for SLOTS if available
+        if league_settings.get("slots"):
+            SLOTS = league_settings["slots"]
+
+        players: List[Player] = [
+            Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
+            for p in roster_data
+        ]
+        print(f"✓ Fetched {len(players)} players from Yahoo\n")
+
+        # Fetch NHL stats for FPTS/G calculations
+        print("Fetching NHL stats and player ranks...")
+        nhl_api.fetch_season_stats(force_refresh=args.force)
+        player_names = [p.name for p in players]
+        roster_stats_map = client.fetch_player_ranks(player_names, include_stats=True)
+
+        # Fetch available FAs for recommendations
+        print("Fetching top 100 available free agents...")
+        try:
+            available_players = client.fetch_available_players(count=100, use_cache=not args.force)
+            # Filter out goalies and injured players
+            available_players = [p for p in available_players if 'G' not in p['pos']]
+            injured_count = sum(1 for p in available_players if p.get('is_injured', False))
+            available_players = [p for p in available_players if not p.get('is_injured', False)]
+            print(f"✓ Fetched {len(available_players)} available skaters ({injured_count} injured filtered out)\n")
+        except Exception as e:
+            print(f"Warning: Could not fetch available players: {e}")
+            available_players = []
+
+        print("=" * 80)
+        print("SECTION 1: ROSTER SATURATION (Bodies Table)")
+        print("=" * 80)
+        print()
+
+        # Build game matrix and bodies table
+        p_games = build_player_game_matrix(players, week_start)
+
+        # Create grid: first column is POS label, then one column per day
+        week_grid: List[List[str]] = [[slot] + [""] * 7 for slot in SLOTS]
+
+        # Fill in the grid for each day
+        for day_i, day_date in enumerate(week_dates):
+            active = [p for p in players if day_date in p_games.get(p.name, set())]
+            assignment = solve_daily_assignment(active, SLOTS)
+
+            # Mark X where a slot is filled
+            for s_i, slot in enumerate(SLOTS):
+                if s_i in assignment:
+                    week_grid[s_i][1 + day_i] = "X"
+                else:
+                    week_grid[s_i][1 + day_i] = ""
+
+        # Build header
+        day_abbrevs = ["M", "T", "W", "Th", "F", "Sa", "Su"]
+        header = ["POS"] + [f"{abbr}({d.strftime('%m/%d')})" for abbr, d in zip(day_abbrevs, week_dates)]
+
+        # Print the bodies table with efficiency columns
+        sorted_indices = sort_slots_by_efficiency(SLOTS, week_grid, 7)
+
+        # Column widths
+        pos_w = 3
+        eff_w = 5
+        pct_w = 6
+        col_w = 8
+
+        # Print header
+        print(f"{'POS':<{pos_w}}  {'EFF':>{eff_w}}  {'PCT':>{pct_w}}  " + "  ".join(f"{h:>{col_w}}" for h in header[1:]))
+
+        # Print rows with EFF, PCT, and colors, in sorted order
+        pos_counts = {}
+        for s_i in sorted_indices:
+            row = week_grid[s_i]
+            slot = SLOTS[s_i]
+            pos_counts[slot] = pos_counts.get(slot, 0) + 1
+            slot_name = f"{slot}{pos_counts[slot]}"
+
+            # Calculate efficiency for this slot across the week (7 days)
+            cells = row[1:]
+            filled = sum(1 for cell in cells if cell == "X")
+            total = 7
+            pct = (filled / total * 100) if total > 0 else 0
+
+            # Format with colors
+            colored_cells = [pad_colored_cell(colorize_cell(cell), col_w) for cell in cells]
+            pct_color = colorize_percentage(pct)
+            eff_str = f"{pct_color}{filled:>2}/{total:<2}{Colors.RESET}"
+            pct_str = f"{pct_color}{pct:5.1f}%{Colors.RESET}"
+            print(f"{slot_name:<{pos_w}}  {eff_str}  {pct_str}  " + "  ".join(colored_cells))
+
+        # Add summary row
+        total_slots = len(SLOTS)
+        daily_fills = []
+        for day_i in range(7):
+            day_filled = sum(1 for s_i in range(len(SLOTS)) if week_grid[s_i][1 + day_i] == "X")
+            daily_fills.append(day_filled)
+
+        # Overall week stats
+        week_total_filled = sum(daily_fills)
+        week_total_slots = total_slots * 7
+        week_pct = (week_total_filled / week_total_slots * 100) if week_total_slots > 0 else 0
+        week_color = colorize_percentage(week_pct)
+        week_eff_str = f"{week_color}{week_total_filled:>2}/{week_total_slots:<2}{Colors.RESET}"
+        week_pct_str = f"{week_color}{week_pct:5.1f}%{Colors.RESET}"
+
+        # Daily summaries
+        daily_cells = []
+        for day_filled in daily_fills:
+            day_pct = (day_filled / total_slots * 100) if total_slots > 0 else 0
+            day_color = colorize_percentage(day_pct)
+            daily_cells.append(f"{day_color}{day_filled:>2}/{total_slots:<2}{Colors.RESET}")
+
+        # Pad daily cells
+        daily_padded = [pad_colored(cell, col_w, '>') for cell in daily_cells]
+
+        print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w] * 7))
+        print(f"{'TOT':<{pos_w}}  {week_eff_str}  {week_pct_str}  " + "  ".join(daily_padded))
+        print()
+
+        print("=" * 80)
+        print("SECTION 2: DROP CANDIDATES (Underutilized Players)")
+        print("=" * 80)
+        print()
+
+        # Calculate drop candidates
+        drop_candidates = []
+        for player in players:
+            # Skip goalies
+            if 'G' in player.pos:
+                continue
+
+            # Get games this week
+            games_this_week = len(p_games.get(player.name, set()))
+
+            # Count actual slot fills by running optimizer each day
+            actual_slots = 0
+            for day_date in week_dates:
+                active_players = [p for p in players if day_date in p_games.get(p.name, set())]
+                assignment = solve_daily_assignment(active_players, SLOTS)
+
+                # Check if this player got assigned
+                for slot_idx, player_idx in assignment.items():
+                    if active_players[player_idx].name == player.name:
+                        actual_slots += 1
+                        break
+
+            # Calculate utilization metrics
+            if games_this_week > 0:
+                utilization_pct = (actual_slots / games_this_week) * 100
+            else:
+                utilization_pct = 0
+
+            wasted_games = games_this_week - actual_slots
+
+            # Get FPTS and FPTS/G
+            player_data = roster_stats_map.get(player.name, {"rank": 999, "fpts": 0.0})
+            fpts = player_data["fpts"]
+            overall_rank = player_data["rank"]
+
+            # Get GP from NHL API
+            gp = nhl_api.get_games_played(player.name, player.team)
+            if gp and gp > 0:
+                fpts_per_game = fpts / gp
+            else:
+                fpts_per_game = 0.0
+
+            # Position flexibility
+            pos_count, pos_display = calculate_position_flexibility(player)
+
+            drop_candidates.append({
+                "player": player,
+                "games": games_this_week,
+                "slots": actual_slots,
+                "utilization_pct": utilization_pct,
+                "wasted": wasted_games,
+                "fpts": fpts,
+                "fpts_per_game": fpts_per_game,
+                "gp": gp if gp else 0,
+                "overall_rank": overall_rank,
+                "pos_display": pos_display,
+                "pos_count": pos_count
+            })
+
+        # Sort by: wasted games (desc), then FPTS/G (asc)
+        drop_candidates.sort(key=lambda x: (-x["wasted"], x["fpts_per_game"]))
+
+        # Display top 5 drop candidates
+        top_drops = drop_candidates[:5]
+        if top_drops:
+            print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<12} {'FPTS/G':>7} {'Games':>5} {'Slots':>5} {'Util%':>6} {'Wasted':>7}")
+            print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 12} {'─' * 7} {'─' * 5} {'─' * 5} {'─' * 6} {'─' * 7}")
+
+            for rank, candidate in enumerate(top_drops, 1):
+                player = candidate["player"]
+                games = candidate["games"]
+                slots = candidate["slots"]
+                util_pct = candidate["utilization_pct"]
+                wasted = candidate["wasted"]
+                fpts_g = candidate["fpts_per_game"]
+                pos_display = candidate["pos_display"]
+
+                # Color code utilization %
+                if util_pct >= 80:
+                    util_str = f"{Colors.GREEN}{util_pct:.0f}%{Colors.RESET}"
+                elif util_pct >= 50:
+                    util_str = f"{Colors.YELLOW}{util_pct:.0f}%{Colors.RESET}"
+                else:
+                    util_str = f"{Colors.RED}{util_pct:.0f}%{Colors.RESET}"
+
+                # Color code wasted games
+                if wasted == 0:
+                    wasted_str = f"{Colors.GREEN}{wasted}{Colors.RESET}"
+                elif wasted <= 2:
+                    wasted_str = f"{Colors.YELLOW}{wasted}{Colors.RESET}"
+                else:
+                    wasted_str = f"{Colors.RED}{wasted}{Colors.RESET}"
+
+                util_padded = pad_colored(util_str, 6, '>')
+                wasted_padded = pad_colored(wasted_str, 7, '>')
+
+                print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_display:<12} {fpts_g:>7.2f} {games:>5} {slots:>5} {util_padded} {wasted_padded}")
+        else:
+            print("No drop candidates found (all players optimally utilized)")
+
+        print()
+        print("=" * 80)
+        print("SECTION 3: TOP FREE AGENT TARGETS")
+        print("=" * 80)
+        print()
+
+        if available_players and len(available_players) > 0:
+            # Calculate current roster efficiency for baseline
+            current_total_filled = 0
+            for day_date in week_dates:
+                current_active = [p for p in players if day_date in p_games.get(p.name, set())]
+                current_assignment = solve_daily_assignment(current_active, SLOTS)
+                current_total_filled += len(current_assignment)
+
+            # Analyze top FAs by efficiency gain
+            fa_recommendations = []
+            for i, avail_player_data in enumerate(available_players[:20]):  # Only check top 20 to save time
+                # Create Player object
+                avail_player = Player(
+                    name=avail_player_data["name"],
+                    team=avail_player_data["team"],
+                    pos=tuple(avail_player_data["pos"])
+                )
+
+                # Build modified roster game matrix (simulate adding this FA)
+                modified_players = list(players) + [avail_player]
+                modified_p_games = build_player_game_matrix(modified_players, week_start)
+
+                # Calculate modified roster efficiency
+                modified_total_filled = 0
+                for day_date in week_dates:
+                    modified_active = [p for p in modified_players if day_date in modified_p_games.get(p.name, set())]
+                    modified_assignment = solve_daily_assignment(modified_active, SLOTS)
+                    modified_total_filled += len(modified_assignment)
+
+                # Calculate efficiency gain
+                eff_gain = modified_total_filled - current_total_filled
+
+                # Get stats
+                overall_rank = avail_player_data.get("overall_rank", i + 1)
+                fantasy_points_total = avail_player_data.get("fantasy_points_total", 0.0)
+                own_pct = avail_player_data.get("ownership_pct", 0.0)
+                games_next_week = len(modified_p_games.get(avail_player.name, set()))
+
+                # Get GP for FPTS/G
+                gp = nhl_api.get_games_played(avail_player.name, avail_player.team)
+                if gp and gp > 0:
+                    ppg = fantasy_points_total / gp
+                else:
+                    ppg = 0.0
+
+                fa_recommendations.append({
+                    "player": avail_player,
+                    "eff_gain": eff_gain,
+                    "overall_rank": overall_rank,
+                    "fpts": fantasy_points_total,
+                    "fpts_per_game": ppg,
+                    "ownership_pct": own_pct,
+                    "games_next_week": games_next_week,
+                    "gp": gp if gp else 0
+                })
+
+            # Sort by efficiency gain (desc), then games next week (desc), then FPTS/G (desc)
+            fa_recommendations.sort(key=lambda x: (-x["eff_gain"], -x["games_next_week"], -x["fpts_per_game"]))
+
+            # Display top 5 FAs
+            top_fas = fa_recommendations[:5]
+            if top_fas:
+                print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<10} {'EFF':>5} {'OR#':>5} {'FPTS/G':>7} {'G@':>4} {'OWN%':>6}")
+                print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 10} {'─' * 5} {'─' * 5} {'─' * 7} {'─' * 4} {'─' * 6}")
+
+                for rank, rec in enumerate(top_fas, 1):
+                    player = rec["player"]
+                    eff_gain = rec["eff_gain"]
+                    overall_rank = rec["overall_rank"]
+                    fpts_g = rec["fpts_per_game"]
+                    games = rec["games_next_week"]
+                    own_pct = rec["ownership_pct"]
+
+                    # Color code efficiency gain
+                    if eff_gain > 0:
+                        eff_str = f"{Colors.GREEN}+{eff_gain}{Colors.RESET}"
+                    elif eff_gain < 0:
+                        eff_str = f"{Colors.RED}{eff_gain}{Colors.RESET}"
+                    else:
+                        eff_str = f"{Colors.YELLOW}{eff_gain}{Colors.RESET}"
+
+                    eff_padded = pad_colored(eff_str, 5, '>')
+                    pos_str = '/'.join(player.pos)
+
+                    print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_str:<10} {eff_padded} {overall_rank:>5} {fpts_g:>7.2f} {games:>4} {own_pct:>5.1f}%")
+            else:
+                print("No free agent recommendations found")
+        else:
+            print("Free agent data not available")
+
+        print()
+        print("=" * 80)
+        print("LEGEND")
+        print("=" * 80)
+        print("EFF    = Efficiency gain (additional filled slots for the week)")
+        print("Util%  = Utilization percentage (Slots ÷ Games × 100)")
+        print("Wasted = Bench games (Games - Slots)")
+        print("G@     = Games next week")
+        print("OR#    = Season rank (lower = better)")
+        print("FPTS/G = Fantasy points per game")
+        print()
+        print("=" * 80)
 
         return 0
 
