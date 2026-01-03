@@ -580,6 +580,12 @@ def main() -> int:
              "with games on that date ranked by FPTS/G, and suggests drop candidates "
              "from your roster who aren't playing. Requires Yahoo API.",
     )
+    ap.add_argument(
+        "--drop-candidates",
+        action="store_true",
+        help="Show underutilized roster players for the upcoming week. Identifies players "
+             "with low slot utilization (benched despite having games). Requires Yahoo API.",
+    )
     args = ap.parse_args()
 
     # Normalize export aliases
@@ -659,6 +665,29 @@ def main() -> int:
         except ValueError:
             print(f"Error: Invalid date format '{args.available_fas}'. Use YYYY-MM-DD format.", file=sys.stderr)
             return 2
+
+    # Validate drop candidates mode
+    if args.drop_candidates:
+        if args.local:
+            print("Error: --drop-candidates requires Yahoo API (cannot use with --local)", file=sys.stderr)
+            return 2
+        if args.day:
+            print("Error: --drop-candidates only works with week mode (cannot use with --day)", file=sys.stderr)
+            return 2
+        if args.recommend_add:
+            print("Error: Cannot use --drop-candidates and --recommend-add together", file=sys.stderr)
+            return 2
+        if args.compare_team:
+            print("Error: Cannot use --drop-candidates and --compare-team together", file=sys.stderr)
+            return 2
+        if args.player_swap:
+            print("Error: Cannot use --drop-candidates and --player-swap together", file=sys.stderr)
+            return 2
+        if args.available_fas:
+            print("Error: Cannot use --drop-candidates and --available-fas together", file=sys.stderr)
+            return 2
+        # Force single-week analysis in drop candidates mode
+        args.weeks = 1
 
     tz = gettz("America/Los_Angeles")
     today = dt.datetime.now(tz=tz).date()
@@ -1608,6 +1637,165 @@ def main() -> int:
         print("  Est Week = Estimated fantasy points for this week (FPTS/G × G@)")
         print("  Est Δ    = Estimated weekly point differential (New Player Est Week - Drop Player Est Week)")
         print("  OWN%     = Ownership percentage")
+
+        return 0
+
+    # Handle --drop-candidates mode (show underutilized roster players)
+    if args.drop_candidates:
+        from yahoo_client import YahooClient
+        from config import config
+
+        # Initialize Yahoo client
+        client = YahooClient()
+        client.authorize()
+
+        # Determine the week to analyze
+        if args.date:
+            provided_date = dt.date.fromisoformat(args.date)
+            week_start = week_start_monday(provided_date)
+        else:
+            week_start = week_start_monday(today)
+
+        week_end = week_start + dt.timedelta(days=6)
+        week_dates = daterange(week_start, 7)
+
+        print(f"=== Drop Candidates Analysis (Week: {week_start.isoformat()} → {week_end.isoformat()}) ===\n")
+
+        # Fetch roster from Yahoo
+        print("Fetching roster from Yahoo API...")
+        roster_data = client.fetch_team_roster()
+        players: List[Player] = [
+            Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
+            for p in roster_data
+        ]
+        print(f"✓ Fetched {len(players)} players from Yahoo\n")
+
+        # Fetch NHL stats for FPTS/G calculations
+        print("Fetching NHL stats for FPTS/G calculations...")
+        nhl_api.fetch_season_stats(force_refresh=args.force)
+
+        # Fetch player stats (FPTS) from Yahoo
+        print("Fetching player stats from Yahoo...")
+        player_names = [p.name for p in players]
+        roster_stats_map = client.fetch_player_ranks(player_names, include_stats=True)
+        print(f"✓ Fetched stats for {len(player_names)} players\n")
+
+        # Build game matrix for the week
+        p_games = build_player_game_matrix(players, week_start)
+
+        # Run lineup optimizer to count actual slot assignments
+        drop_candidates = []
+        for player in players:
+            # Skip goalies
+            if 'G' in player.pos:
+                continue
+
+            # Get games this week
+            games_this_week = len(p_games.get(player.name, set()))
+
+            # Count actual slot fills by running optimizer each day
+            actual_slots = 0
+            for day_date in week_dates:
+                active_players = [p for p in players if day_date in p_games.get(p.name, set())]
+                assignment = solve_daily_assignment(active_players, SLOTS)
+
+                # Check if this player got assigned
+                for slot_idx, player_idx in assignment.items():
+                    if active_players[player_idx].name == player.name:
+                        actual_slots += 1
+                        break
+
+            # Calculate utilization metrics
+            if games_this_week > 0:
+                utilization_pct = (actual_slots / games_this_week) * 100
+            else:
+                utilization_pct = 0
+
+            wasted_games = games_this_week - actual_slots
+
+            # Get FPTS and FPTS/G
+            player_data = roster_stats_map.get(player.name, {"rank": 999, "fpts": 0.0})
+            fpts = player_data["fpts"]
+            overall_rank = player_data["rank"]
+
+            # Get GP from NHL API
+            gp = nhl_api.get_games_played(player.name, player.team)
+            if gp and gp > 0:
+                fpts_per_game = fpts / gp
+            else:
+                fpts_per_game = 0.0
+
+            # Position flexibility
+            pos_count, pos_display = calculate_position_flexibility(player)
+
+            drop_candidates.append({
+                "player": player,
+                "games": games_this_week,
+                "slots": actual_slots,
+                "utilization_pct": utilization_pct,
+                "wasted": wasted_games,
+                "fpts": fpts,
+                "fpts_per_game": fpts_per_game,
+                "gp": gp if gp else 0,
+                "overall_rank": overall_rank,
+                "pos_display": pos_display,
+                "pos_count": pos_count
+            })
+
+        # Sort by: wasted games (desc), then FPTS/G (asc)
+        drop_candidates.sort(key=lambda x: (-x["wasted"], x["fpts_per_game"]))
+
+        # Display results
+        print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<12} {'GP':>4} {'OR#':>5} {'FPTS':>6} {'FPTS/G':>7} {'Games':>5} {'Slots':>5} {'Util%':>6} {'Wasted':>7}")
+        print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 12} {'─' * 4} {'─' * 5} {'─' * 6} {'─' * 7} {'─' * 5} {'─' * 5} {'─' * 6} {'─' * 7}")
+
+        for rank, candidate in enumerate(drop_candidates, 1):
+            player = candidate["player"]
+            games = candidate["games"]
+            slots = candidate["slots"]
+            util_pct = candidate["utilization_pct"]
+            wasted = candidate["wasted"]
+            fpts = candidate["fpts"]
+            fpts_g = candidate["fpts_per_game"]
+            gp = candidate["gp"]
+            or_rank = candidate["overall_rank"]
+            pos_display = candidate["pos_display"]
+
+            # Color code utilization %
+            if util_pct >= 80:
+                util_str = f"{Colors.GREEN}{util_pct:.0f}%{Colors.RESET}"
+            elif util_pct >= 50:
+                util_str = f"{Colors.YELLOW}{util_pct:.0f}%{Colors.RESET}"
+            else:
+                util_str = f"{Colors.RED}{util_pct:.0f}%{Colors.RESET}"
+
+            # Color code wasted games
+            if wasted == 0:
+                wasted_str = f"{Colors.GREEN}{wasted}{Colors.RESET}"
+            elif wasted <= 2:
+                wasted_str = f"{Colors.YELLOW}{wasted}{Colors.RESET}"
+            else:
+                wasted_str = f"{Colors.RED}{wasted}{Colors.RESET}"
+
+            util_padded = pad_colored(util_str, 6, '>')
+            wasted_padded = pad_colored(wasted_str, 7, '>')
+
+            print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_display:<12} {gp:>4} {or_rank:>5} {fpts:>6.1f} {fpts_g:>7.2f} {games:>5} {slots:>5} {util_padded} {wasted_padded}")
+
+        # Print legend
+        print("\nLegend:")
+        print("  GP       = Games played this season (from NHL API)")
+        print("  OR#      = Season rank (Yahoo's 2025 season performance rank, lower = better)")
+        print("  FPTS     = Total fantasy points this season")
+        print("  FPTS/G   = Fantasy points per game (FPTS ÷ GP)")
+        print("  Games    = Total games this week")
+        print("  Slots    = Active roster slot assignments (via lineup optimizer)")
+        print("  Util%    = Utilization percentage (Slots ÷ Games × 100)")
+        print("  Wasted   = Bench games (Games - Slots)")
+        print("\nColor Coding:")
+        print("  Util%: Green ≥80%, Yellow 50-79%, Red <50%")
+        print("  Wasted: Green = 0, Yellow 1-2, Red ≥3")
+        print("\nDrop Priority: High 'Wasted' + Low 'FPTS/G' = Prime drop candidate")
 
         return 0
 
