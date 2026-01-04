@@ -2296,8 +2296,8 @@ def main() -> int:
             # Display top 5 FAs
             top_fas = fa_recommendations[:5]
             if top_fas:
-                print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<10} {'FPTS/G':>7} {'Week Pts':>8} {'EFF':>5} {'Slots':>5} {'G@':>4} {'OWN%':>6}")
-                print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 10} {'─' * 7} {'─' * 8} {'─' * 5} {'─' * 5} {'─' * 4} {'─' * 6}")
+                print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<10} {'FPTS/G':>7} {'Week Pts':>8} {'EFF':>5} {'Slots':>5} {'G@':>4} {'OR#':>4}")
+                print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 10} {'─' * 7} {'─' * 8} {'─' * 5} {'─' * 5} {'─' * 4} {'─' * 4}")
 
                 for rank, rec in enumerate(top_fas, 1):
                     player = rec["player"]
@@ -2330,7 +2330,7 @@ def main() -> int:
                     eff_padded = pad_colored(eff_str, 5, '>')
                     pos_str = '/'.join(player.pos)
 
-                    print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_str:<10} {fpts_g:>7.2f} {week_pts_padded} {eff_padded} {slots:>5} {games:>4} {own_pct:>5.1f}%")
+                    print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_str:<10} {fpts_g:>7.2f} {week_pts_padded} {eff_padded} {slots:>5} {games:>4} {overall_rank:>4}")
             else:
                 print("No free agent recommendations found")
         else:
