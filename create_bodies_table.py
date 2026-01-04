@@ -624,6 +624,13 @@ def main() -> int:
     if args.force:
         global _nhl_schedule_cache
         _nhl_schedule_cache.clear()
+
+        # Clear Yahoo roster cache
+        from pathlib import Path
+        roster_cache = Path(".cache/yahoo_roster.json")
+        if roster_cache.exists():
+            roster_cache.unlink()
+
         print("✓ Force refresh enabled - clearing all caches")
 
     # Validate comparison mode
@@ -753,8 +760,8 @@ def main() -> int:
             client = YahooClient()
             client.authorize()
 
-            roster_data = client.fetch_team_roster()
-            league_settings = client.fetch_league_settings()
+            roster_data = client.fetch_team_roster(use_cache=False)
+            league_settings = client.fetch_league_settings(use_cache=False)
 
             # Build YAML structure
             roster_yaml = {"players": roster_data}
@@ -795,8 +802,8 @@ def main() -> int:
             client.authorize()
 
             # Fetch roster and league settings
-            roster_data = client.fetch_team_roster()
-            league_settings = client.fetch_league_settings()
+            roster_data = client.fetch_team_roster(use_cache=not args.force)
+            league_settings = client.fetch_league_settings(use_cache=not args.force)
 
             # Use league settings for SLOTS if available
             if league_settings.get("slots"):
@@ -814,7 +821,7 @@ def main() -> int:
             if args.compare_team:
                 print(f"Fetching opponent team {args.compare_team} roster...")
                 try:
-                    opponent_roster_data = client.fetch_team_roster(team_id=args.compare_team)
+                    opponent_roster_data = client.fetch_team_roster(team_id=args.compare_team, use_cache=not args.force)
                     opponent_players = [
                         Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
                         for p in opponent_roster_data
@@ -1714,7 +1721,7 @@ def main() -> int:
 
         # Fetch roster from Yahoo
         print("Fetching roster from Yahoo API...")
-        roster_data = client.fetch_team_roster()
+        roster_data = client.fetch_team_roster(use_cache=not args.force)
         players: List[Player] = [
             Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
             for p in roster_data
@@ -1919,8 +1926,8 @@ def main() -> int:
 
         # Fetch roster and league settings
         print("Fetching roster from Yahoo API...")
-        roster_data = client.fetch_team_roster()
-        league_settings = client.fetch_league_settings()
+        roster_data = client.fetch_team_roster(use_cache=not args.force)
+        league_settings = client.fetch_league_settings(use_cache=not args.force)
 
         # Use league settings for SLOTS if available
         if league_settings.get("slots"):
@@ -2364,7 +2371,7 @@ def main() -> int:
 
         # Fetch roster
         print("Fetching roster from Yahoo API...")
-        roster_data = client.fetch_team_roster()
+        roster_data = client.fetch_team_roster(use_cache=not args.force)
         players = [
             Player(name=p["name"], team=p["team"], pos=tuple(p["pos"]))
             for p in roster_data

@@ -322,7 +322,8 @@ players:
 To minimize API calls and improve performance, the tool caches data:
 
 - **NHL Stats Cache**: `.cache/nhl_stats.json` - 24-hour TTL (825 NHL players)
-- **Yahoo FA Cache**: `.cache/yahoo_free_agents.json` - 30-minute TTL (top 100 FAs)
+- **Yahoo Roster Cache**: `.cache/yahoo_roster.json` - 24-hour TTL (your roster and league settings)
+- **Yahoo FA Cache**: `.cache/yahoo_free_agents.json` - 1-hour TTL (top 100 FAs)
 - **In-memory schedule cache**: Team game schedules cached per week
 - **Force refresh**: Use `--force` to bypass all caches and fetch fresh data
 

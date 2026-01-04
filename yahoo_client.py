@@ -28,7 +28,9 @@ from config import config
 # Cache configuration
 _cache_dir = Path(".cache")
 _yahoo_fa_cache_file = _cache_dir / "yahoo_free_agents.json"
-_cache_ttl = 3600  # 1 hour cache for Yahoo free agents (stats update frequently during games)
+_yahoo_roster_cache_file = _cache_dir / "yahoo_roster.json"
+_fa_cache_ttl = 3600  # 1 hour cache for Yahoo free agents (stats update frequently during games)
+_roster_cache_ttl = 86400  # 24 hour cache for roster (changes infrequently)
 
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -306,13 +308,14 @@ class YahooClient:
         except ValueError as e:
             raise RuntimeError(f"Invalid JSON response from Yahoo API. Check that the endpoint is correct.")
 
-    def fetch_team_roster(self, league_id: Optional[str] = None, team_id: Optional[str] = None, include_stats: bool = False) -> List[Dict[str, Any]]:
+    def fetch_team_roster(self, league_id: Optional[str] = None, team_id: Optional[str] = None, include_stats: bool = False, use_cache: bool = True) -> List[Dict[str, Any]]:
         """Fetch team roster from Yahoo Fantasy API.
 
         Args:
             league_id: League ID (defaults to config.league_id)
             team_id: Team ID (defaults to config.team_id)
             include_stats: Include player stats and fantasy points (default False)
+            use_cache: Use cached data if available and fresh (default True)
 
         Returns:
             List of player dictionaries with name, team, and positions
@@ -323,6 +326,12 @@ class YahooClient:
 
         if not league_id or not team_id:
             raise ValueError("League ID and Team ID must be provided")
+
+        # Check cache if enabled and not requesting stats (stats change frequently)
+        if use_cache and not include_stats:
+            cache_data = self._load_roster_cache(league_id, team_id)
+            if cache_data:
+                return cache_data.get("roster", [])
 
         # Fetch team roster (with stats if requested)
         if include_stats:
@@ -429,6 +438,15 @@ class YahooClient:
 
                     players.append(player_dict)
 
+            # Cache roster and league settings together (only if not requesting stats)
+            if not include_stats:
+                # Fetch league settings to cache alongside roster
+                try:
+                    league_settings = self.fetch_league_settings(league_id, use_cache=False)
+                    self._save_roster_cache(league_id, team_id, players, league_settings)
+                except Exception:
+                    pass  # Don't fail if league settings fetch fails
+
             return players
 
         except (KeyError, IndexError, TypeError, AttributeError) as e:
@@ -532,19 +550,27 @@ class YahooClient:
 
         return rank_map
 
-    def fetch_league_settings(self, league_id: Optional[str] = None) -> Dict[str, Any]:
+    def fetch_league_settings(self, league_id: Optional[str] = None, use_cache: bool = True) -> Dict[str, Any]:
         """Fetch league roster settings.
 
         Args:
             league_id: League ID (defaults to config.league_id)
+            use_cache: Use cached data if available and fresh (default True)
 
         Returns:
             Dictionary with roster position configuration
         """
         league_id = league_id or config.league_id
+        team_id = config.team_id  # Need team_id for cache lookup
 
         if not league_id:
             raise ValueError("League ID must be provided")
+
+        # Check cache if enabled
+        if use_cache and team_id:
+            cache_data = self._load_roster_cache(league_id, team_id)
+            if cache_data and "league_settings" in cache_data:
+                return cache_data["league_settings"]
 
         endpoint = f"league/nhl.l.{league_id}/settings"
         data = self._api_request(endpoint)
@@ -569,10 +595,21 @@ class YahooClient:
                 if position_type not in ("BN", "IR", "IR+", "Util", "NA"):
                     slots.extend([position_type] * count)
 
-            return {
+            settings_dict = {
                 "slots": slots,
                 "league_name": league_info.get("name", ""),
             }
+
+            # Cache roster and league settings together
+            if team_id:
+                try:
+                    # Fetch roster to cache alongside league settings
+                    roster_data = self.fetch_team_roster(league_id, team_id, use_cache=False)
+                    self._save_roster_cache(league_id, team_id, roster_data, settings_dict)
+                except Exception:
+                    pass  # Don't fail if roster fetch fails
+
+            return settings_dict
 
         except (KeyError, IndexError, TypeError) as e:
             raise RuntimeError(f"Failed to parse league settings from Yahoo API: {e}")
@@ -649,7 +686,7 @@ class YahooClient:
             age = current_time - file_mtime
 
             # If cache is older than TTL, don't use it
-            if age > _cache_ttl:
+            if age > _fa_cache_ttl:
                 return None
 
             # Load cache from file
@@ -686,6 +723,61 @@ class YahooClient:
 
             # Atomic rename
             temp_file.replace(_yahoo_fa_cache_file)
+
+        except Exception:
+            pass  # Fail silently, cache is optional
+
+    def _load_roster_cache(self, league_id: str, team_id: str) -> Optional[Dict[str, Any]]:
+        """Load roster cache from disk if fresh."""
+        if not _yahoo_roster_cache_file.exists():
+            return None
+
+        try:
+            # Check file modification time
+            file_mtime = os.path.getmtime(_yahoo_roster_cache_file)
+            current_time = time.time()
+            age = current_time - file_mtime
+
+            # If cache is older than TTL, don't use it
+            if age > _roster_cache_ttl:
+                return None
+
+            # Load cache from file
+            with open(_yahoo_roster_cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+
+            # Verify league ID and team ID match
+            if cache_data.get("league_id") != league_id or cache_data.get("team_id") != team_id:
+                return None
+
+            print(f"  ✓ Loaded roster from cache ({age / 3600:.1f} hours old)")
+            return cache_data
+
+        except Exception:
+            return None
+
+    def _save_roster_cache(self, league_id: str, team_id: str, roster_data: List[Dict[str, Any]], league_settings: Dict[str, Any]) -> None:
+        """Save roster and league settings cache to disk."""
+        try:
+            # Create cache directory if it doesn't exist
+            _cache_dir.mkdir(exist_ok=True)
+
+            cache_data = {
+                "league_id": league_id,
+                "team_id": team_id,
+                "timestamp": time.time(),
+                "roster": roster_data,
+                "league_settings": league_settings
+            }
+
+            # Save to temp file first, then rename (atomic operation)
+            temp_file = _yahoo_roster_cache_file.with_suffix('.tmp')
+
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f)
+
+            # Atomic rename
+            temp_file.replace(_yahoo_roster_cache_file)
 
         except Exception:
             pass  # Fail silently, cache is optional
