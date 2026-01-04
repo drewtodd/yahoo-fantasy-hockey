@@ -14,6 +14,9 @@ A tool to optimize your Yahoo Fantasy Hockey lineup by visualizing roster slot c
 - **Flexible date selection** - Analyze any week by providing any date within it
 
 ### Advanced Features
+- **Weekly summary report (`--weekly-summary`)** - Comprehensive Monday morning report with roster saturation, drop candidates, and top FAs
+- **Automated email reports** - Schedule Sunday morning email delivery of weekly summary (see [QUICKSTART_AUTOMATION.md](QUICKSTART_AUTOMATION.md))
+- **Drop candidates (`--drop-candidates`)** - Identify underutilized roster players with wasted bench games
 - **Streaming pickups (`--available-fas`)** - Find best available free agents playing on a specific date with smart drop recommendations
 - **Free agent recommendations (`--recommend-add`)** - Discover top weekly efficiency gains from available players
 - **Team comparisons (`--compare-team`)** - Benchmark your roster efficiency against league opponents
@@ -334,6 +337,29 @@ In streaming pickups and recommendations:
 - **Green Est Δ** - Positive point differential (good swap)
 - **Red Est Δ** - Negative point differential (bad swap)
 
+## Automation
+
+Schedule automated weekly reports delivered via email every Sunday morning.
+
+**Quick Setup:**
+```bash
+# 1. Configure email in send_weekly_email.py
+# 2. Set up Gmail App Password (see QUICKSTART_AUTOMATION.md)
+# 3. Schedule with launchd
+cp com.fantasyhockey.weeklyreport.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.fantasyhockey.weeklyreport.plist
+```
+
+**What you get:**
+- Weekly summary report delivered every Sunday morning
+- HTML email with color-coded output preserved
+- Roster saturation, drop candidates, and top FA recommendations
+- Perfect for Monday morning waiver decisions
+
+**Full guides:**
+- **Quick Start**: [QUICKSTART_AUTOMATION.md](QUICKSTART_AUTOMATION.md) - 5-minute setup
+- **Detailed Guide**: [AUTOMATION_GUIDE.md](AUTOMATION_GUIDE.md) - All options and troubleshooting
+
 ## OAuth & Security
 
 - OAuth tokens stored in `.yahoo_tokens.json` (gitignored, user-only permissions)
@@ -355,8 +381,15 @@ In streaming pickups and recommendations:
 - `.yahoo_tokens.json` - OAuth tokens
 - `.cache/` - NHL stats and free agent caches
 
+### Automation Files
+- `send_weekly_email.py` - Email sender with HTML formatting (recommended)
+- `send_weekly_report.sh` - Shell script for basic email via mail command
+- `com.fantasyhockey.weeklyreport.plist` - launchd configuration for macOS scheduling
+
 ### Documentation
 - `README.md` - This file
+- `QUICKSTART_AUTOMATION.md` - 5-minute automation setup guide
+- `AUTOMATION_GUIDE.md` - Comprehensive automation and troubleshooting guide
 - `STREAMING_FEATURE_PLAN.md` - Detailed implementation plan for --available-fas
 
 ## License
