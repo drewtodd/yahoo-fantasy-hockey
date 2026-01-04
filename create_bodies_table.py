@@ -2165,12 +2165,19 @@ def main() -> int:
                 modified_players = list(players) + [avail_player]
                 modified_p_games = build_player_game_matrix(modified_players, week_start)
 
-                # Calculate modified roster efficiency
+                # Calculate modified roster efficiency AND track FA's slot fills
                 modified_total_filled = 0
+                fa_slots_filled = 0
                 for day_date in week_dates:
                     modified_active = [p for p in modified_players if day_date in modified_p_games.get(p.name, set())]
                     modified_assignment = solve_daily_assignment(modified_active, SLOTS)
                     modified_total_filled += len(modified_assignment)
+
+                    # Count if this FA got assigned to an active slot this day
+                    for slot_idx, player_idx in modified_assignment.items():
+                        if modified_active[player_idx].name == avail_player.name:
+                            fa_slots_filled += 1
+                            break
 
                 # Calculate efficiency gain
                 eff_gain = modified_total_filled - current_total_filled
@@ -2188,12 +2195,17 @@ def main() -> int:
                 else:
                     ppg = 0.0
 
+                # Calculate expected weekly FPTS for this FA
+                expected_weekly_fpts = fa_slots_filled * ppg
+
                 fa_recommendations.append({
                     "player": avail_player,
                     "eff_gain": eff_gain,
                     "overall_rank": overall_rank,
                     "fpts": fantasy_points_total,
                     "fpts_per_game": ppg,
+                    "expected_weekly_fpts": expected_weekly_fpts,
+                    "fa_slots_filled": fa_slots_filled,
                     "ownership_pct": own_pct,
                     "games_next_week": games_next_week,
                     "gp": gp if gp else 0
@@ -2205,16 +2217,28 @@ def main() -> int:
             # Display top 5 FAs
             top_fas = fa_recommendations[:5]
             if top_fas:
-                print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<10} {'EFF':>5} {'OR#':>5} {'FPTS/G':>7} {'G@':>4} {'OWN%':>6}")
-                print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 10} {'─' * 5} {'─' * 5} {'─' * 7} {'─' * 4} {'─' * 6}")
+                print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<10} {'FPTS/G':>7} {'Week Pts':>8} {'EFF':>5} {'Slots':>5} {'G@':>4} {'OWN%':>6}")
+                print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 10} {'─' * 7} {'─' * 8} {'─' * 5} {'─' * 5} {'─' * 4} {'─' * 6}")
 
                 for rank, rec in enumerate(top_fas, 1):
                     player = rec["player"]
                     eff_gain = rec["eff_gain"]
                     overall_rank = rec["overall_rank"]
                     fpts_g = rec["fpts_per_game"]
+                    week_pts = rec["expected_weekly_fpts"]
+                    slots = rec["fa_slots_filled"]
                     games = rec["games_next_week"]
                     own_pct = rec["ownership_pct"]
+
+                    # Color code weekly points (higher = better for FA pickups)
+                    if week_pts >= 30:
+                        week_pts_str = f"{Colors.GREEN}{week_pts:>8.1f}{Colors.RESET}"
+                    elif week_pts >= 20:
+                        week_pts_str = f"{Colors.YELLOW}{week_pts:>8.1f}{Colors.RESET}"
+                    else:
+                        week_pts_str = f"{Colors.RED}{week_pts:>8.1f}{Colors.RESET}"
+
+                    week_pts_padded = pad_colored(week_pts_str, 8, '>')
 
                     # Color code efficiency gain
                     if eff_gain > 0:
@@ -2227,7 +2251,7 @@ def main() -> int:
                     eff_padded = pad_colored(eff_str, 5, '>')
                     pos_str = '/'.join(player.pos)
 
-                    print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_str:<10} {eff_padded} {overall_rank:>5} {fpts_g:>7.2f} {games:>4} {own_pct:>5.1f}%")
+                    print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_str:<10} {fpts_g:>7.2f} {week_pts_padded} {eff_padded} {slots:>5} {games:>4} {own_pct:>5.1f}%")
             else:
                 print("No free agent recommendations found")
         else:
@@ -2237,12 +2261,19 @@ def main() -> int:
         print("=" * 80)
         print("LEGEND")
         print("=" * 80)
-        print("Week Pts = Expected weekly points (Slots × FPTS/G) - actual contribution this week")
-        print("EFF      = Efficiency gain (additional filled slots for the week)")
-        print("G@       = Games next week")
+        print("Week Pts = Expected weekly points (Slots × FPTS/G)")
+        print("           Drop Candidates: Actual contribution from current roster players")
+        print("           Free Agents: Projected contribution if added to roster")
+        print("EFF      = Efficiency gain (additional roster slots filled if FA added)")
+        print("Slots    = Active roster slot assignments from lineup optimizer")
+        print("G@       = Games scheduled next week")
         print("OR#      = Season rank (lower = better)")
         print("FPTS/G   = Fantasy points per game")
         print("⚠ THIN   = Player at position with minimal roster depth (dropping may hurt flexibility)")
+        print()
+        print("Color Coding:")
+        print("  Drop Candidates (Week Pts): Red <10, Yellow 10-20, Green >20")
+        print("  Free Agents (Week Pts):     Red <20, Yellow 20-30, Green >30")
         print()
         print("=" * 80)
 
