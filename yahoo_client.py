@@ -308,7 +308,7 @@ class YahooClient:
         except ValueError as e:
             raise RuntimeError(f"Invalid JSON response from Yahoo API. Check that the endpoint is correct.")
 
-    def fetch_team_roster(self, league_id: Optional[str] = None, team_id: Optional[str] = None, include_stats: bool = False, use_cache: bool = True) -> List[Dict[str, Any]]:
+    def fetch_team_roster(self, league_id: Optional[str] = None, team_id: Optional[str] = None, include_stats: bool = False, use_cache: bool = True, _save_cache: bool = True) -> List[Dict[str, Any]]:
         """Fetch team roster from Yahoo Fantasy API.
 
         Args:
@@ -316,6 +316,7 @@ class YahooClient:
             team_id: Team ID (defaults to config.team_id)
             include_stats: Include player stats and fantasy points (default False)
             use_cache: Use cached data if available and fresh (default True)
+            _save_cache: Internal flag to prevent circular cache saves (default True)
 
         Returns:
             List of player dictionaries with name, team, and positions
@@ -438,11 +439,11 @@ class YahooClient:
 
                     players.append(player_dict)
 
-            # Cache roster and league settings together (only if not requesting stats)
-            if not include_stats:
-                # Fetch league settings to cache alongside roster
+            # Cache roster and league settings together (only if not requesting stats and saving enabled)
+            if not include_stats and _save_cache:
+                # Fetch league settings to cache alongside roster (prevent circular call)
                 try:
-                    league_settings = self.fetch_league_settings(league_id, use_cache=False)
+                    league_settings = self.fetch_league_settings(league_id, use_cache=False, _save_cache=False)
                     self._save_roster_cache(league_id, team_id, players, league_settings)
                 except Exception:
                     pass  # Don't fail if league settings fetch fails
@@ -550,12 +551,13 @@ class YahooClient:
 
         return rank_map
 
-    def fetch_league_settings(self, league_id: Optional[str] = None, use_cache: bool = True) -> Dict[str, Any]:
+    def fetch_league_settings(self, league_id: Optional[str] = None, use_cache: bool = True, _save_cache: bool = True) -> Dict[str, Any]:
         """Fetch league roster settings.
 
         Args:
             league_id: League ID (defaults to config.league_id)
             use_cache: Use cached data if available and fresh (default True)
+            _save_cache: Internal flag to prevent circular cache saves (default True)
 
         Returns:
             Dictionary with roster position configuration
@@ -600,11 +602,11 @@ class YahooClient:
                 "league_name": league_info.get("name", ""),
             }
 
-            # Cache roster and league settings together
-            if team_id:
+            # Cache roster and league settings together (only if saving enabled)
+            if team_id and _save_cache:
                 try:
-                    # Fetch roster to cache alongside league settings
-                    roster_data = self.fetch_team_roster(league_id, team_id, use_cache=False)
+                    # Fetch roster to cache alongside league settings (prevent circular call)
+                    roster_data = self.fetch_team_roster(league_id, team_id, use_cache=False, _save_cache=False)
                     self._save_roster_cache(league_id, team_id, roster_data, settings_dict)
                 except Exception:
                     pass  # Don't fail if roster fetch fails
