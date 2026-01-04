@@ -1761,6 +1761,9 @@ def main() -> int:
             # Position flexibility
             pos_count, pos_display = calculate_position_flexibility(player)
 
+            # Calculate expected weekly FPTS (actual contribution when used)
+            expected_weekly_fpts = actual_slots * fpts_per_game
+
             drop_candidates.append({
                 "player": player,
                 "games": games_this_week,
@@ -1769,66 +1772,89 @@ def main() -> int:
                 "wasted": wasted_games,
                 "fpts": fpts,
                 "fpts_per_game": fpts_per_game,
+                "expected_weekly_fpts": expected_weekly_fpts,
                 "gp": gp if gp else 0,
                 "overall_rank": overall_rank,
                 "pos_display": pos_display,
                 "pos_count": pos_count
             })
 
-        # Sort by: wasted games (desc), then FPTS/G (asc)
-        drop_candidates.sort(key=lambda x: (-x["wasted"], x["fpts_per_game"]))
+        # Calculate position depth (number of players at each position excluding Util/BN/IR)
+        position_counts = {}
+        for player in players:
+            if 'G' not in player.pos:  # Skip goalies
+                for pos in player.pos:
+                    if pos not in ['Util', 'BN', 'IR', 'IR+', 'NA']:
+                        position_counts[pos] = position_counts.get(pos, 0) + 1
+
+        # Count roster slots per position (excluding Util/BN/IR)
+        slot_counts = {}
+        for slot in SLOTS:
+            if slot not in ['Util', 'BN', 'IR', 'IR+', 'NA', 'G']:
+                slot_counts[slot] = slot_counts.get(slot, 0) + 1
+
+        # Mark players at thin positions (roster count <= slot count)
+        for candidate in drop_candidates:
+            player = candidate["player"]
+            # Check if player is at a thin position
+            is_thin_position = False
+            for pos in player.pos:
+                if pos in position_counts and pos in slot_counts:
+                    if position_counts[pos] <= slot_counts[pos]:
+                        is_thin_position = True
+                        break
+            candidate["is_thin_position"] = is_thin_position
+
+        # Sort by: expected weekly FPTS (asc) - lowest contributors first
+        # Secondary: FPTS/G (asc) - worst performers among similar weekly values
+        drop_candidates.sort(key=lambda x: (x["expected_weekly_fpts"], x["fpts_per_game"]))
 
         # Display results
-        print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<12} {'GP':>4} {'OR#':>5} {'FPTS':>6} {'FPTS/G':>7} {'Games':>5} {'Slots':>5} {'Util%':>6} {'Wasted':>7}")
-        print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 12} {'─' * 4} {'─' * 5} {'─' * 6} {'─' * 7} {'─' * 5} {'─' * 5} {'─' * 6} {'─' * 7}")
+        print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<12} {'FPTS/G':>7} {'Week Pts':>8} {'OR#':>5} {'GP':>4} {'Games':>5} {'Slots':>5}  ")
+        print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 12} {'─' * 7} {'─' * 8} {'─' * 5} {'─' * 4} {'─' * 5} {'─' * 5}  ")
 
         for rank, candidate in enumerate(drop_candidates, 1):
             player = candidate["player"]
             games = candidate["games"]
             slots = candidate["slots"]
-            util_pct = candidate["utilization_pct"]
-            wasted = candidate["wasted"]
-            fpts = candidate["fpts"]
             fpts_g = candidate["fpts_per_game"]
+            week_pts = candidate["expected_weekly_fpts"]
             gp = candidate["gp"]
             or_rank = candidate["overall_rank"]
             pos_display = candidate["pos_display"]
+            is_thin = candidate["is_thin_position"]
 
-            # Color code utilization %
-            if util_pct >= 80:
-                util_str = f"{Colors.GREEN}{util_pct:.0f}%{Colors.RESET}"
-            elif util_pct >= 50:
-                util_str = f"{Colors.YELLOW}{util_pct:.0f}%{Colors.RESET}"
+            # Color code weekly points (lower = worse, candidates for drop)
+            if week_pts < 10:
+                week_pts_str = f"{Colors.RED}{week_pts:>8.1f}{Colors.RESET}"
+            elif week_pts < 20:
+                week_pts_str = f"{Colors.YELLOW}{week_pts:>8.1f}{Colors.RESET}"
             else:
-                util_str = f"{Colors.RED}{util_pct:.0f}%{Colors.RESET}"
+                week_pts_str = f"{Colors.GREEN}{week_pts:>8.1f}{Colors.RESET}"
 
-            # Color code wasted games
-            if wasted == 0:
-                wasted_str = f"{Colors.GREEN}{wasted}{Colors.RESET}"
-            elif wasted <= 2:
-                wasted_str = f"{Colors.YELLOW}{wasted}{Colors.RESET}"
-            else:
-                wasted_str = f"{Colors.RED}{wasted}{Colors.RESET}"
+            week_pts_padded = pad_colored(week_pts_str, 8, '>')
 
-            util_padded = pad_colored(util_str, 6, '>')
-            wasted_padded = pad_colored(wasted_str, 7, '>')
+            # Add warning for thin positions
+            warning = f"{Colors.YELLOW} ⚠ THIN{Colors.RESET}" if is_thin else ""
+            warning_padded = pad_colored(warning, 7, '<')
 
-            print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_display:<12} {gp:>4} {or_rank:>5} {fpts:>6.1f} {fpts_g:>7.2f} {games:>5} {slots:>5} {util_padded} {wasted_padded}")
+            print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_display:<12} {fpts_g:>7.2f} {week_pts_padded} {or_rank:>5} {gp:>4} {games:>5} {slots:>5} {warning_padded}")
 
         # Print legend
         print("\nLegend:")
+        print("  Week Pts = Expected weekly points (Slots × FPTS/G) - actual contribution this week")
         print("  GP       = Games played this season (from NHL API)")
         print("  OR#      = Season rank (Yahoo's 2025 season performance rank, lower = better)")
-        print("  FPTS     = Total fantasy points this season")
-        print("  FPTS/G   = Fantasy points per game (FPTS ÷ GP)")
+        print("  FPTS/G   = Fantasy points per game (Total FPTS ÷ GP)")
         print("  Games    = Total games this week")
         print("  Slots    = Active roster slot assignments (via lineup optimizer)")
-        print("  Util%    = Utilization percentage (Slots ÷ Games × 100)")
-        print("  Wasted   = Bench games (Games - Slots)")
-        print("\nColor Coding:")
-        print("  Util%: Green ≥80%, Yellow 50-79%, Red <50%")
-        print("  Wasted: Green = 0, Yellow 1-2, Red ≥3")
-        print("\nDrop Priority: High 'Wasted' + Low 'FPTS/G' = Prime drop candidate")
+        print("  ⚠ THIN   = Player at position with minimal roster depth (dropping may hurt flexibility)")
+        print("\nColor Coding (Week Pts):")
+        print("  Red <10    = Very low weekly contribution (prime drop candidate)")
+        print("  Yellow 10-20 = Moderate contribution")
+        print("  Green >20  = Strong weekly contribution")
+        print("\nDrop Strategy: Players sorted by lowest weekly contribution first")
+        print("  Consider position depth (⚠ THIN warning) before dropping")
 
         return 0
 
@@ -2030,6 +2056,9 @@ def main() -> int:
             # Position flexibility
             pos_count, pos_display = calculate_position_flexibility(player)
 
+            # Calculate expected weekly FPTS (actual contribution when used)
+            expected_weekly_fpts = actual_slots * fpts_per_game
+
             drop_candidates.append({
                 "player": player,
                 "games": games_this_week,
@@ -2038,50 +2067,73 @@ def main() -> int:
                 "wasted": wasted_games,
                 "fpts": fpts,
                 "fpts_per_game": fpts_per_game,
+                "expected_weekly_fpts": expected_weekly_fpts,
                 "gp": gp if gp else 0,
                 "overall_rank": overall_rank,
                 "pos_display": pos_display,
                 "pos_count": pos_count
             })
 
-        # Sort by: wasted games (desc), then FPTS/G (asc)
-        drop_candidates.sort(key=lambda x: (-x["wasted"], x["fpts_per_game"]))
+        # Calculate position depth (number of players at each position excluding Util/BN/IR)
+        position_counts = {}
+        for player in players:
+            if 'G' not in player.pos:  # Skip goalies
+                for pos in player.pos:
+                    if pos not in ['Util', 'BN', 'IR', 'IR+', 'NA']:
+                        position_counts[pos] = position_counts.get(pos, 0) + 1
+
+        # Count roster slots per position (excluding Util/BN/IR)
+        slot_counts = {}
+        for slot in SLOTS:
+            if slot not in ['Util', 'BN', 'IR', 'IR+', 'NA', 'G']:
+                slot_counts[slot] = slot_counts.get(slot, 0) + 1
+
+        # Mark players at thin positions (roster count <= slot count)
+        for candidate in drop_candidates:
+            player = candidate["player"]
+            # Check if player is at a thin position
+            is_thin_position = False
+            for pos in player.pos:
+                if pos in position_counts and pos in slot_counts:
+                    if position_counts[pos] <= slot_counts[pos]:
+                        is_thin_position = True
+                        break
+            candidate["is_thin_position"] = is_thin_position
+
+        # Sort by: expected weekly FPTS (asc) - lowest contributors first
+        # Secondary: FPTS/G (asc) - worst performers among similar weekly values
+        drop_candidates.sort(key=lambda x: (x["expected_weekly_fpts"], x["fpts_per_game"]))
 
         # Display top 5 drop candidates
         top_drops = drop_candidates[:5]
         if top_drops:
-            print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<12} {'FPTS/G':>7} {'Games':>5} {'Slots':>5} {'Util%':>6} {'Wasted':>7}")
-            print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 12} {'─' * 7} {'─' * 5} {'─' * 5} {'─' * 6} {'─' * 7}")
+            print(f"{'RANK':<6} {'PLAYER':<25} {'TEAM':<5} {'POS':<12} {'FPTS/G':>7} {'Week Pts':>8} {'Games':>5} {'Slots':>5}  ")
+            print(f"{'─' * 6} {'─' * 25} {'─' * 5} {'─' * 12} {'─' * 7} {'─' * 8} {'─' * 5} {'─' * 5}  ")
 
             for rank, candidate in enumerate(top_drops, 1):
                 player = candidate["player"]
                 games = candidate["games"]
                 slots = candidate["slots"]
-                util_pct = candidate["utilization_pct"]
-                wasted = candidate["wasted"]
                 fpts_g = candidate["fpts_per_game"]
+                week_pts = candidate["expected_weekly_fpts"]
                 pos_display = candidate["pos_display"]
+                is_thin = candidate["is_thin_position"]
 
-                # Color code utilization %
-                if util_pct >= 80:
-                    util_str = f"{Colors.GREEN}{util_pct:.0f}%{Colors.RESET}"
-                elif util_pct >= 50:
-                    util_str = f"{Colors.YELLOW}{util_pct:.0f}%{Colors.RESET}"
+                # Color code weekly points (lower = worse, candidates for drop)
+                if week_pts < 10:
+                    week_pts_str = f"{Colors.RED}{week_pts:>8.1f}{Colors.RESET}"
+                elif week_pts < 20:
+                    week_pts_str = f"{Colors.YELLOW}{week_pts:>8.1f}{Colors.RESET}"
                 else:
-                    util_str = f"{Colors.RED}{util_pct:.0f}%{Colors.RESET}"
+                    week_pts_str = f"{Colors.GREEN}{week_pts:>8.1f}{Colors.RESET}"
 
-                # Color code wasted games
-                if wasted == 0:
-                    wasted_str = f"{Colors.GREEN}{wasted}{Colors.RESET}"
-                elif wasted <= 2:
-                    wasted_str = f"{Colors.YELLOW}{wasted}{Colors.RESET}"
-                else:
-                    wasted_str = f"{Colors.RED}{wasted}{Colors.RESET}"
+                week_pts_padded = pad_colored(week_pts_str, 8, '>')
 
-                util_padded = pad_colored(util_str, 6, '>')
-                wasted_padded = pad_colored(wasted_str, 7, '>')
+                # Add warning for thin positions
+                warning = f"{Colors.YELLOW} ⚠ THIN{Colors.RESET}" if is_thin else ""
+                warning_padded = pad_colored(warning, 7, '<')
 
-                print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_display:<12} {fpts_g:>7.2f} {games:>5} {slots:>5} {util_padded} {wasted_padded}")
+                print(f"{rank:<6} {player.name:<25} {player.team:<5} {pos_display:<12} {fpts_g:>7.2f} {week_pts_padded} {games:>5} {slots:>5} {warning_padded}")
         else:
             print("No drop candidates found (all players optimally utilized)")
 
@@ -2185,12 +2237,12 @@ def main() -> int:
         print("=" * 80)
         print("LEGEND")
         print("=" * 80)
-        print("EFF    = Efficiency gain (additional filled slots for the week)")
-        print("Util%  = Utilization percentage (Slots ÷ Games × 100)")
-        print("Wasted = Bench games (Games - Slots)")
-        print("G@     = Games next week")
-        print("OR#    = Season rank (lower = better)")
-        print("FPTS/G = Fantasy points per game")
+        print("Week Pts = Expected weekly points (Slots × FPTS/G) - actual contribution this week")
+        print("EFF      = Efficiency gain (additional filled slots for the week)")
+        print("G@       = Games next week")
+        print("OR#      = Season rank (lower = better)")
+        print("FPTS/G   = Fantasy points per game")
+        print("⚠ THIN   = Player at position with minimal roster depth (dropping may hurt flexibility)")
         print()
         print("=" * 80)
 
