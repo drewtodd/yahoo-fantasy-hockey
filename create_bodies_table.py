@@ -214,10 +214,20 @@ def calculate_position_flexibility(player: Player) -> Tuple[int, str]:
 def solve_daily_assignment(
     active_players: List[Player],
     slots: List[str],
+    player_values: Optional[List[float]] = None,
 ) -> Dict[int, int]:
     """
     Returns mapping: slot_index -> player_index assigned (within active_players),
-    maximizing number of filled slots.
+    maximizing expected points (if player_values provided) or filled slots (if not).
+
+    Args:
+        active_players: List of players available for assignment
+        slots: List of roster slot positions
+        player_values: Optional list of values (e.g., FPTS/G) for each player.
+                      If provided, maximizes total value. If None, maximizes filled slots.
+
+    Returns:
+        Dict mapping slot_index -> player_index (within active_players)
     """
     model = cp_model.CpModel()
 
@@ -240,8 +250,16 @@ def solve_daily_assignment(
         if vars_for_player:
             model.Add(sum(vars_for_player) <= 1)
 
-    # Objective: maximize filled slots
-    model.Maximize(sum(x.values()) if x else 0)
+    # Objective: maximize expected points (weighted) or filled slots (unweighted)
+    if player_values:
+        # Scale to integers (OR-Tools CP-SAT requires integer coefficients)
+        # Multiply by 100 to preserve 2 decimal places of precision
+        scaled_values = [int(v * 100) for v in player_values]
+        objective_terms = [x[(s_i, p_i)] * scaled_values[p_i] for (s_i, p_i) in x]
+        model.Maximize(sum(objective_terms) if objective_terms else 0)
+    else:
+        # Maximize filled slots (original behavior for bodies table)
+        model.Maximize(sum(x.values()) if x else 0)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 2.0  # plenty for this size
@@ -1716,6 +1734,17 @@ def main() -> int:
         # Build game matrix for the week
         p_games = build_player_game_matrix(players, week_start)
 
+        # Build FPTS/G map for all players (for optimizer weighting)
+        player_fpts_g_map = {}
+        for p in players:
+            p_data = roster_stats_map.get(p.name, {"rank": 999, "fpts": 0.0})
+            p_fpts = p_data["fpts"]
+            p_gp = nhl_api.get_games_played(p.name, p.team)
+            if p_gp and p_gp > 0:
+                player_fpts_g_map[p.name] = p_fpts / p_gp
+            else:
+                player_fpts_g_map[p.name] = 0.0
+
         # Run lineup optimizer to count actual slot assignments
         drop_candidates = []
         for player in players:
@@ -1726,11 +1755,16 @@ def main() -> int:
             # Get games this week
             games_this_week = len(p_games.get(player.name, set()))
 
-            # Count actual slot fills by running optimizer each day
+            # Count actual slot fills by running optimizer each day WITH FPTS/G weights
             actual_slots = 0
             for day_date in week_dates:
                 active_players = [p for p in players if day_date in p_games.get(p.name, set())]
-                assignment = solve_daily_assignment(active_players, SLOTS)
+
+                # Build player values list for optimizer
+                player_values = [player_fpts_g_map.get(p.name, 0.0) for p in active_players]
+
+                # Run optimizer with FPTS/G weights to maximize expected points
+                assignment = solve_daily_assignment(active_players, SLOTS, player_values)
 
                 # Check if this player got assigned
                 for slot_idx, player_idx in assignment.items():
@@ -1746,7 +1780,7 @@ def main() -> int:
 
             wasted_games = games_this_week - actual_slots
 
-            # Get FPTS and FPTS/G
+            # Get FPTS and FPTS/G (already calculated above)
             player_data = roster_stats_map.get(player.name, {"rank": 999, "fpts": 0.0})
             fpts = player_data["fpts"]
             overall_rank = player_data["rank"]
@@ -2011,6 +2045,17 @@ def main() -> int:
         print("=" * 80)
         print()
 
+        # Build FPTS/G map for all players (for optimizer weighting)
+        player_fpts_g_map = {}
+        for p in players:
+            p_data = roster_stats_map.get(p.name, {"rank": 999, "fpts": 0.0})
+            p_fpts = p_data["fpts"]
+            p_gp = nhl_api.get_games_played(p.name, p.team)
+            if p_gp and p_gp > 0:
+                player_fpts_g_map[p.name] = p_fpts / p_gp
+            else:
+                player_fpts_g_map[p.name] = 0.0
+
         # Calculate drop candidates
         drop_candidates = []
         for player in players:
@@ -2021,11 +2066,16 @@ def main() -> int:
             # Get games this week
             games_this_week = len(p_games.get(player.name, set()))
 
-            # Count actual slot fills by running optimizer each day
+            # Count actual slot fills by running optimizer each day WITH FPTS/G weights
             actual_slots = 0
             for day_date in week_dates:
                 active_players = [p for p in players if day_date in p_games.get(p.name, set())]
-                assignment = solve_daily_assignment(active_players, SLOTS)
+
+                # Build player values list for optimizer
+                player_values = [player_fpts_g_map.get(p.name, 0.0) for p in active_players]
+
+                # Run optimizer with FPTS/G weights to maximize expected points
+                assignment = solve_daily_assignment(active_players, SLOTS, player_values)
 
                 # Check if this player got assigned
                 for slot_idx, player_idx in assignment.items():
@@ -2041,7 +2091,7 @@ def main() -> int:
 
             wasted_games = games_this_week - actual_slots
 
-            # Get FPTS and FPTS/G
+            # Get FPTS and FPTS/G (already calculated above)
             player_data = roster_stats_map.get(player.name, {"rank": 999, "fpts": 0.0})
             fpts = player_data["fpts"]
             overall_rank = player_data["rank"]
@@ -2144,11 +2194,16 @@ def main() -> int:
         print()
 
         if available_players and len(available_players) > 0:
-            # Calculate current roster efficiency for baseline
+            # Calculate current roster efficiency for baseline (WITH FPTS/G weights)
             current_total_filled = 0
             for day_date in week_dates:
                 current_active = [p for p in players if day_date in p_games.get(p.name, set())]
-                current_assignment = solve_daily_assignment(current_active, SLOTS)
+
+                # Build player values for current roster
+                current_values = [player_fpts_g_map.get(p.name, 0.0) for p in current_active]
+
+                # Run optimizer with FPTS/G weights
+                current_assignment = solve_daily_assignment(current_active, SLOTS, current_values)
                 current_total_filled += len(current_assignment)
 
             # Analyze top FAs by efficiency gain
@@ -2161,16 +2216,33 @@ def main() -> int:
                     pos=tuple(avail_player_data["pos"])
                 )
 
+                # Get FA's FPTS/G for optimizer weighting
+                fa_fpts = avail_player_data.get("fantasy_points_total", 0.0)
+                fa_gp = nhl_api.get_games_played(avail_player.name, avail_player.team)
+                if fa_gp and fa_gp > 0:
+                    fa_fpts_g = fa_fpts / fa_gp
+                else:
+                    fa_fpts_g = 0.0
+
                 # Build modified roster game matrix (simulate adding this FA)
                 modified_players = list(players) + [avail_player]
                 modified_p_games = build_player_game_matrix(modified_players, week_start)
 
-                # Calculate modified roster efficiency AND track FA's slot fills
+                # Build extended FPTS/G map including the FA
+                modified_fpts_g_map = dict(player_fpts_g_map)
+                modified_fpts_g_map[avail_player.name] = fa_fpts_g
+
+                # Calculate modified roster efficiency AND track FA's slot fills (WITH FPTS/G weights)
                 modified_total_filled = 0
                 fa_slots_filled = 0
                 for day_date in week_dates:
                     modified_active = [p for p in modified_players if day_date in modified_p_games.get(p.name, set())]
-                    modified_assignment = solve_daily_assignment(modified_active, SLOTS)
+
+                    # Build player values for modified roster
+                    modified_values = [modified_fpts_g_map.get(p.name, 0.0) for p in modified_active]
+
+                    # Run optimizer with FPTS/G weights
+                    modified_assignment = solve_daily_assignment(modified_active, SLOTS, modified_values)
                     modified_total_filled += len(modified_assignment)
 
                     # Count if this FA got assigned to an active slot this day
