@@ -2045,6 +2045,25 @@ def main() -> int:
 
         print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w] * 7))
         print(f"{'TOT':<{pos_w}}  {week_eff_str}  {week_pct_str}  " + "  ".join(daily_padded))
+
+        # Calculate and display goalie minimum indicator
+        goalie_appearances = 0
+        for s_i in range(len(SLOTS)):
+            if SLOTS[s_i] == 'G':
+                # Count filled slots (X) across all 7 days for this goalie slot
+                for day_i in range(7):
+                    if week_grid[s_i][1 + day_i] == "X":
+                        goalie_appearances += 1
+
+        goalie_min = 3
+        if goalie_appearances >= goalie_min:
+            status_color = Colors.GREEN
+            status_icon = "✓"
+        else:
+            status_color = Colors.RED
+            status_icon = "⚠"
+
+        print(f"\nGoalie Appearances: {status_color}{goalie_appearances}/{goalie_min} {status_icon}{Colors.RESET}")
         print()
 
         print("=" * 80)
@@ -2785,6 +2804,26 @@ def main() -> int:
 
     print(f"{'─' * pos_w}  {'─' * eff_w}  {'─' * pct_w}  " + "  ".join(['─' * col_w for _ in range(total_days)]))
     print(f"{'TOT':<{pos_w}}  {overall_eff_str}  {overall_pct_str}  " + "  ".join(daily_cells))
+
+    # Calculate and display goalie minimum indicator (only for week view, not single day)
+    if total_days == 7:
+        goalie_appearances = 0
+        for s_i in range(len(SLOTS)):
+            if SLOTS[s_i] == 'G':
+                # Count filled slots (X) across all 7 days for this goalie slot
+                for day_i in range(total_days):
+                    if grid[s_i][1 + day_i] == "X":
+                        goalie_appearances += 1
+
+        goalie_min = 3
+        if goalie_appearances >= goalie_min:
+            status_color = Colors.GREEN
+            status_icon = "✓"
+        else:
+            status_color = Colors.RED
+            status_icon = "⚠"
+
+        print(f"\nGoalie Appearances: {status_color}{goalie_appearances}/{goalie_min} {status_icon}{Colors.RESET}")
 
     print("\nEmpty slots by position (lower is better):")
     for pos in ["C", "LW", "RW", "D", "G"]:
