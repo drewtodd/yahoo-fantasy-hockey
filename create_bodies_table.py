@@ -1239,6 +1239,36 @@ def main() -> int:
         week_end = week_start + dt.timedelta(days=6)
         week_dates = daterange(week_start, 7)
 
+        # Fetch roster stats for player valuation (FPTS/G)
+        print("Fetching player stats for weighted optimization...")
+        player_names = [p.name for p in players]
+        roster_stats_map = client.fetch_player_ranks(player_names, include_stats=True)
+
+        # Pre-fetch NHL stats cache
+        nhl_api.fetch_season_stats(force_refresh=args.force)
+
+        # Build FPTS/G map for all players (for weighted optimizer)
+        player_fpts_g_map = {}
+        for p in players:
+            p_data = roster_stats_map.get(p.name, {"rank": 999, "fpts": 0.0})
+            p_fpts = p_data["fpts"]
+            p_gp = nhl_api.get_games_played(p.name, p.team)
+            if p_gp and p_gp > 0:
+                player_fpts_g_map[p.name] = p_fpts / p_gp
+            else:
+                player_fpts_g_map[p.name] = 0.0
+
+        # Add swap-add player to FPTS/G map
+        # Fetch stats for the swap-add player from Yahoo API
+        add_player_stats = client.fetch_player_ranks([swap_add_player.name], include_stats=True)
+        add_player_data = add_player_stats.get(swap_add_player.name, {"rank": 999, "fpts": 0.0})
+        add_fpts = add_player_data["fpts"]
+        add_gp = nhl_api.get_games_played(swap_add_player.name, swap_add_player.team)
+        if add_gp and add_gp > 0:
+            player_fpts_g_map[swap_add_player.name] = add_fpts / add_gp
+        else:
+            player_fpts_g_map[swap_add_player.name] = 0.0
+
         # Build games-per-player for both rosters
         current_p_games = build_player_game_matrix(players, week_start)
         modified_p_games = build_player_game_matrix(modified_players, week_start)
@@ -1250,23 +1280,37 @@ def main() -> int:
         current_filled_by_pos = {k: 0 for k in set(SLOTS)}
         modified_filled_by_pos = {k: 0 for k in set(SLOTS)}
 
+        # Track expected FPTS for both rosters
+        current_expected_fpts = 0.0
+        modified_expected_fpts = 0.0
+
         # Process each day for both rosters
         for day_i, day_date in enumerate(week_dates):
-            # Current roster
+            # Current roster (weighted by FPTS/G)
             current_active = [p for p in players if day_date in current_p_games.get(p.name, set())]
-            current_assignment = solve_daily_assignment(current_active, SLOTS)
+            current_player_values = [player_fpts_g_map.get(p.name, 0.0) for p in current_active]
+            current_assignment = solve_daily_assignment(current_active, SLOTS, current_player_values)
             for s_i, slot in enumerate(SLOTS):
                 if s_i in current_assignment:
                     current_grid[s_i][1 + day_i] = "X"
                     current_filled_by_pos[slot] += 1
+                    # Add expected FPTS for this player
+                    p_i = current_assignment[s_i]
+                    fpts_g = player_fpts_g_map.get(current_active[p_i].name, 0.0)
+                    current_expected_fpts += fpts_g
 
-            # Modified roster
+            # Modified roster (weighted by FPTS/G)
             modified_active = [p for p in modified_players if day_date in modified_p_games.get(p.name, set())]
-            modified_assignment = solve_daily_assignment(modified_active, SLOTS)
+            modified_player_values = [player_fpts_g_map.get(p.name, 0.0) for p in modified_active]
+            modified_assignment = solve_daily_assignment(modified_active, SLOTS, modified_player_values)
             for s_i, slot in enumerate(SLOTS):
                 if s_i in modified_assignment:
                     modified_grid[s_i][1 + day_i] = "X"
                     modified_filled_by_pos[slot] += 1
+                    # Add expected FPTS for this player
+                    p_i = modified_assignment[s_i]
+                    fpts_g = player_fpts_g_map.get(modified_active[p_i].name, 0.0)
+                    modified_expected_fpts += fpts_g
 
         # Display both grids
         day_abbrevs = ["M", "T", "W", "Th", "F", "Sa", "Su"]
@@ -1397,6 +1441,12 @@ def main() -> int:
         pct_diff_color = Colors.GREEN if pct_diff > 0 else (Colors.RED if pct_diff < 0 else Colors.YELLOW)
         print(f"{'PCT':20} {current_overall_pct:>11.1f}%  {modified_overall_pct:>11.1f}%  {pct_diff_color}{pct_diff_str:>8}{Colors.RESET}")
 
+        # Expected FPTS (new row)
+        fpts_diff = modified_expected_fpts - current_expected_fpts
+        fpts_diff_str = f"{'+' if fpts_diff >= 0 else ''}{fpts_diff:.1f}"
+        fpts_diff_color = Colors.GREEN if fpts_diff > 0 else (Colors.RED if fpts_diff < 0 else Colors.YELLOW)
+        print(f"{'Expected FPTS':20} {current_expected_fpts:>12.1f}  {modified_expected_fpts:>12.1f}  {fpts_diff_color}{fpts_diff_str:>8}{Colors.RESET}")
+
         # Daily breakdown
         for day_i, abbr in enumerate(day_abbrevs):
             day_date = week_dates[day_i]
@@ -1407,6 +1457,97 @@ def main() -> int:
             diff_str = f"{'+' if diff >= 0 else ''}{diff}"
             diff_color = Colors.GREEN if diff > 0 else (Colors.RED if diff < 0 else Colors.YELLOW)
             print(f"{day_label:20} {current_filled:>12}  {modified_filled:>12}  {diff_color}{diff_str:>8}{Colors.RESET}")
+
+        # Player Details Section
+        print("\n" + "=" * 60)
+
+        # Calculate drop player details
+        drop_games = len(current_p_games.get(drop_player.name, set()))
+        drop_fpts_g = player_fpts_g_map.get(drop_player.name, 0.0)
+
+        # Count drop player's actual slot fills
+        drop_slots = 0
+        for day_date in week_dates:
+            current_active = [p for p in players if day_date in current_p_games.get(p.name, set())]
+            current_player_values = [player_fpts_g_map.get(p.name, 0.0) for p in current_active]
+            current_assignment = solve_daily_assignment(current_active, SLOTS, current_player_values)
+            for s_i, p_i in current_assignment.items():
+                if current_active[p_i].name == drop_player.name:
+                    drop_slots += 1
+
+        drop_contribution = drop_slots * drop_fpts_g
+
+        # Calculate add player details
+        add_games = len(modified_p_games.get(swap_add_player.name, set()))
+        add_fpts_g = player_fpts_g_map.get(swap_add_player.name, 0.0)
+
+        # Count add player's actual slot fills in modified roster
+        add_slots = 0
+        for day_date in week_dates:
+            modified_active = [p for p in modified_players if day_date in modified_p_games.get(p.name, set())]
+            modified_player_values = [player_fpts_g_map.get(p.name, 0.0) for p in modified_active]
+            modified_assignment = solve_daily_assignment(modified_active, SLOTS, modified_player_values)
+            for s_i, p_i in modified_assignment.items():
+                if modified_active[p_i].name == swap_add_player.name:
+                    add_slots += 1
+
+        add_contribution = add_slots * add_fpts_g
+
+        # Display drop player details
+        drop_pos_str = '/'.join(drop_player.pos) if drop_player.pos else 'N/A'
+        print(f"\nDrop: {drop_player.name} ({drop_player.team}, {drop_pos_str}) - {drop_fpts_g:.2f} FPTS/G")
+        print(f"  Games this week: {drop_games}")
+        print(f"  Expected slots: {drop_slots}")
+        print(f"  Expected contribution: {drop_contribution:.1f} FPTS")
+
+        # Display add player details
+        add_pos_str = '/'.join(swap_add_player.pos) if swap_add_player.pos else 'N/A'
+        print(f"\nAdd: {swap_add_player.name} ({swap_add_player.team}, {add_pos_str}) - {add_fpts_g:.2f} FPTS/G")
+        print(f"  Games this week: {add_games}")
+        print(f"  Expected slots: {add_slots}")
+        print(f"  Expected contribution: {add_contribution:.1f} FPTS")
+
+        # Net impact summary
+        net_impact = add_contribution - drop_contribution
+        net_color = Colors.GREEN if net_impact > 0 else (Colors.RED if net_impact < 0 else Colors.YELLOW)
+        net_label = "better" if net_impact > 0 else ("worse" if net_impact < 0 else "neutral")
+        print(f"\n{net_color}Net Impact: {net_impact:+.1f} FPTS ({net_label}){Colors.RESET}")
+
+        # Multi-position warning
+        if len(drop_player.pos) > 1 and 'G' not in drop_player.pos:
+            pos_count = len([p for p in drop_player.pos if p not in ['Util', 'BN', 'IR', 'IR+', 'NA']])
+            if pos_count > 1:
+                print(f"\n{Colors.YELLOW}⚠ WARNING: {drop_player.name} is multi-position ({drop_pos_str}){Colors.RESET}")
+                print("  Dropping may reduce lineup flexibility")
+
+        # Position depth warning
+        # Calculate position counts for skaters only (exclude goalies)
+        position_counts = {}
+        slot_counts = {}
+        for player in players:
+            if 'G' not in player.pos:
+                for pos in player.pos:
+                    if pos not in ['Util', 'BN', 'IR', 'IR+', 'NA']:
+                        position_counts[pos] = position_counts.get(pos, 0) + 1
+
+        for slot in SLOTS:
+            if slot not in ['G', 'Util', 'BN', 'IR', 'IR+', 'NA']:
+                slot_counts[slot] = slot_counts.get(slot, 0) + 1
+
+        # Check if dropping from thin position
+        is_thin_position = False
+        thin_positions = []
+        if 'G' not in drop_player.pos:
+            for pos in drop_player.pos:
+                if pos in position_counts and pos in slot_counts:
+                    if position_counts[pos] <= slot_counts[pos]:
+                        is_thin_position = True
+                        thin_positions.append(f"{pos} ({position_counts[pos]} players for {slot_counts[pos]} slots)")
+
+        if is_thin_position:
+            thin_str = ', '.join(thin_positions)
+            print(f"\n{Colors.RED}⚠ THIN: {thin_str}{Colors.RESET}")
+            print(f"  Dropping {drop_player.name} may limit future lineup options")
 
         return 0
 
