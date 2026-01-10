@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$(whoami)" == "drew" ]]; then
+  export HOME="/home/drew"
+fi
 
 # Ensure HOME is set for non-interactive sessions (e.g., CI)
 export HOME="${HOME:-/home/drew}"
