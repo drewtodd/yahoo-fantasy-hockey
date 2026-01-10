@@ -1,0 +1,12 @@
+services:
+  hockey:
+    build: .
+    container_name: hockey-cli
+    environment:
+      - TZ=America/Los_Angeles
+    env_file:
+      - .env
+    volumes:
+      - ./.cache:/app/.cache
+      - ./data:/app/data
+    restart: "no"

@@ -1,0 +1,34 @@
+.
+├── __pycache__
+│   ├── config.cpython-312.pyc
+│   ├── create_bodies_table.cpython-314.pyc
+│   ├── nhl_api.cpython-312.pyc
+│   ├── send_weekly_email.cpython-312.pyc
+│   ├── yahoo_client.cpython-312.pyc
+│   └── yahoo_client.cpython-314.pyc
+├── AUTOMATION_GUIDE.md
+├── check_stats.py
+├── com.fantasyhockey.weeklyreport.plist
+├── config.py
+├── create_bodies_table.py
+├── debug_gp.py
+├── dir.txt
+├── nhl_api.py
+├── PLAYER_SWAP_ENHANCEMENT_PLAN.md
+├── QUICKSTART_AUTOMATION.md
+├── README.md
+├── requirements.txt
+├── ROADMAP.md
+├── roster.yml
+├── send_weekly_email.py
+├── send_weekly_report.sh
+├── STREAMING_FEATURE_PLAN.md
+├── test_missing_players.py
+├── test_nhl_api_limit.py
+├── test_nhl_api.py
+├── test_roster_stats.py
+├── yahoo_client.py
+├── yahoo-developer-app-info.md
+└── yahoo-fantasy-hockey-rules.md
+
+2 directories, 30 files
