@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ensure HOME is set for non-interactive sessions (e.g., CI)
+export HOME="${HOME:-/home/drew}"
+
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="origin"
 BRANCH="main"
@@ -12,6 +15,12 @@ echo "    Branch  : $BRANCH"
 echo
 
 cd "$APP_DIR"
+
+# Ensure git operations use the correct GitHub SSH key in non-interactive sessions
+# (Prevents CI-triggered deploys from failing with "Permission denied (publickey)")
+if [[ -f "$HOME/.ssh/id_ed25519_github" ]]; then
+  export GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
+fi
 
 # Prevent concurrent deploys
 LOCKFILE="/tmp/yf-hockey-cli-deploy.lock"
