@@ -8,7 +8,6 @@ __pycache__/
 
 # Cache directory
 .cache/
-!.cache/.gitkeep
 
 # Yahoo OAuth tokens and credentials
 .yahoo_tokens.json
@@ -19,3 +18,6 @@ yahoo-developer-app-info.md
 # Export files
 yfh-export-*.csv
 yfh-export-*.md
+
+# Runtime output (never commit)
+data/
