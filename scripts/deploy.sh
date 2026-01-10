@@ -16,10 +16,23 @@ echo
 
 cd "$APP_DIR"
 
-# Ensure git operations use the correct GitHub SSH key in non-interactive sessions
-# (Prevents CI-triggered deploys from failing with "Permission denied (publickey)")
-if [[ -f "$HOME/.ssh/id_ed25519_github" ]]; then
-  export GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
+# Ensure git operations use the correct GitHub SSH key in non-interactive sessions.
+# We use an absolute path (not ~) because non-interactive shells may not expand it.
+GITHUB_KEY_PATH="$HOME/.ssh/id_ed25519_github"
+if [[ -f "$GITHUB_KEY_PATH" ]]; then
+  export GIT_SSH_COMMAND="ssh -i $GITHUB_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+else
+  echo "WARN: GitHub SSH key not found at $GITHUB_KEY_PATH"
+fi
+
+# Lightweight diagnostics for CI runs (helps debug GitHub Actions SSH environment)
+if [[ -n "${CI:-}" ]]; then
+  echo "==> CI diagnostics"
+  echo "    WHOAMI: $(whoami)"
+  echo "    HOME  : $HOME"
+  echo "    KEY   : $GITHUB_KEY_PATH (exists: $(test -f "$GITHUB_KEY_PATH" && echo yes || echo no))"
+  ls -la "$HOME/.ssh" || true
+  ssh -i "$GITHUB_KEY_PATH" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -T git@github.com || true
 fi
 
 # Prevent concurrent deploys
