@@ -501,22 +501,29 @@ def strip_ansi_codes(text: str) -> str:
 
 
 def convert_terminal_to_markdown(text: str) -> str:
-    """Convert terminal output to markdown format."""
+    """Convert terminal output to markdown format, including tables."""
     lines = text.split('\n')
     result = []
 
     # Known section header patterns
     section_keywords = ['WEEKLY SUMMARY', 'SECTION', 'LEGEND', 'COLOR CODING']
 
-    for line in lines:
-        # Strip ANSI codes first
+    # Table detection state
+    in_table = False
+    table_headers = []
+    table_column_positions = None
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
         clean_line = strip_ansi_codes(line)
 
         # Convert section headers (lines with '=' * 80)
         if clean_line.strip() and all(c == '=' for c in clean_line.strip()):
-            continue  # Skip separator lines in markdown
+            i += 1
+            continue  # Skip separator lines
 
-        # Check if line is a section header (contains known keywords)
+        # Check if line is a section header
         is_section_header = False
         for keyword in section_keywords:
             if keyword in clean_line.strip().upper():
@@ -524,10 +531,153 @@ def convert_terminal_to_markdown(text: str) -> str:
                 break
 
         if is_section_header and not clean_line.startswith(' '):
-            # Add markdown header
+            in_table = False
+            table_column_positions = None
             result.append(f"\n## {clean_line.strip()}\n")
+            i += 1
+            continue
+
+        # Detect table header (contains common table column names)
+        table_keywords = ['POS', 'EFF', 'PCT', 'RANK', 'PLAYER', 'TEAM', 'FPTS/G', 'Week Pts']
+        has_table_keyword = any(keyword in clean_line for keyword in table_keywords)
+
+        # Check if this looks like a table header row
+        if has_table_keyword and not in_table and not clean_line.startswith(' '):
+            # Look ahead for separator line to determine column boundaries
+            column_positions = None
+            if i + 1 < len(lines):
+                next_clean = strip_ansi_codes(lines[i + 1])
+                if '─' in next_clean:
+                    # Parse separator line to find column positions
+                    column_positions = []
+                    in_dash = False
+                    start_pos = 0
+                    for pos, char in enumerate(next_clean):
+                        if char == '─' and not in_dash:
+                            in_dash = True
+                            start_pos = pos
+                        elif char != '─' and in_dash:
+                            in_dash = False
+                            column_positions.append((start_pos, pos))
+                    if in_dash:  # Handle last column
+                        column_positions.append((start_pos, len(next_clean)))
+
+            if column_positions and len(column_positions) >= 3:
+                # Extract columns based on positions
+                columns = []
+                for start, end in column_positions:
+                    if start < len(clean_line):
+                        col_text = clean_line[start:end].strip()
+                        if col_text:
+                            columns.append(col_text)
+
+                if len(columns) >= 3:
+                    in_table = True
+                    table_headers = columns
+                    table_column_positions = column_positions
+
+                    # Create markdown table header
+                    result.append('')
+                    result.append('| ' + ' | '.join(columns) + ' |')
+                    result.append('|' + '|'.join(['---' for _ in columns]) + '|')
+                    i += 2  # Skip both header and separator line
+                    continue
+
+            # Fallback to simple splitting if separator line parsing fails
+            columns = re.split(r'\s{2,}', clean_line.strip())
+            if len(columns) >= 3:
+                in_table = True
+                table_headers = columns
+                table_column_positions = None  # No position info available
+
+                # Create markdown table header
+                result.append('')
+                result.append('| ' + ' | '.join(columns) + ' |')
+                result.append('|' + '|'.join(['---' for _ in columns]) + '|')
+                i += 1
+
+                # Skip separator line if next line is a separator
+                if i < len(lines):
+                    next_clean = strip_ansi_codes(lines[i])
+                    if '─' in next_clean:
+                        i += 1
+
+                continue
+
+        # If in table, convert data rows
+        if in_table:
+            # Check if we've left the table (empty line or new section)
+            # Don't exit on separator lines (─) as they might precede TOT row
+            if not clean_line.strip():
+                in_table = False
+                table_column_positions = None
+                result.append('')
+                i += 1
+                continue
+
+            # Exit table if we hit a line that's not part of table data
+            # (but allow separator lines with ─ and alphanumeric data rows)
+            if (clean_line and not clean_line.startswith(' ') and
+                not clean_line[0].isalnum() and '─' not in clean_line):
+                in_table = False
+                table_column_positions = None
+                result.append(clean_line)
+                i += 1
+                continue
+
+            # Skip separator rows
+            if '─' in clean_line:
+                # Look ahead to see if the next line is a TOT row
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1]
+                    next_clean = strip_ansi_codes(next_line)
+                    if next_clean.strip().startswith('TOT'):
+                        # Skip separator and process TOT row
+                        i += 1
+                        clean_line = next_clean
+                        # Extract data from TOT row using column positions if available
+                        if table_column_positions:
+                            row_data = []
+                            for start, end in table_column_positions:
+                                if start < len(clean_line):
+                                    row_data.append(clean_line[start:end].strip())
+                        else:
+                            row_data = re.split(r'\s{2,}', clean_line.strip())
+                        result.append('| ' + ' | '.join(row_data) + ' |')
+                        i += 1
+                        # End table after TOT row
+                        in_table = False
+                        table_column_positions = None
+                        continue
+                # Just a separator without TOT - skip it
+                i += 1
+                continue
+
+            # Convert data row to markdown table row
+            if clean_line.strip():
+                # Use column positions if available, otherwise split by multiple spaces
+                if table_column_positions:
+                    row_data = []
+                    for start, end in table_column_positions:
+                        if start < len(clean_line):
+                            col_text = clean_line[start:end].strip()
+                            row_data.append(col_text if col_text else '')
+                        else:
+                            row_data.append('')
+                else:
+                    row_data = re.split(r'\s{2,}', clean_line.strip())
+                    # Ensure we have same number of columns as header (pad if needed)
+                    while len(row_data) < len(table_headers):
+                        row_data.append('')
+                result.append('| ' + ' | '.join(row_data) + ' |')
+            else:
+                in_table = False
+                table_column_positions = None
+                result.append('')
         else:
             result.append(clean_line)
+
+        i += 1
 
     return '\n'.join(result)
 
