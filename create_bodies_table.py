@@ -512,6 +512,7 @@ def convert_terminal_to_markdown(text: str) -> str:
     in_table = False
     table_headers = []
     table_column_positions = None
+    skip_color_coding = False
     i = 0
 
     while i < len(lines):
@@ -533,6 +534,22 @@ def convert_terminal_to_markdown(text: str) -> str:
         if is_section_header and not clean_line.startswith(' '):
             in_table = False
             table_column_positions = None
+
+            # Skip Color Coding section entirely
+            if 'COLOR CODING' in clean_line.strip().upper():
+                skip_color_coding = True
+                i += 1
+                # Skip all lines until we hit an empty line or end
+                while i < len(lines):
+                    next_line = strip_ansi_codes(lines[i])
+                    if not next_line.strip():
+                        # Found empty line, section ends
+                        skip_color_coding = False
+                        i += 1
+                        break
+                    i += 1
+                continue
+
             result.append(f"\n## {clean_line.strip()}\n")
             i += 1
             continue
