@@ -20,6 +20,7 @@ import datetime as dt
 import io
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import requests
@@ -439,6 +440,10 @@ def export_to_csv(grid: List[List[str]], header: List[str], output_file: Optiona
     csv_content = output.getvalue()
 
     if output_file:
+        # Create parent directories if they don't exist
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(csv_content)
 
@@ -462,6 +467,10 @@ def export_to_markdown(grid: List[List[str]], header: List[str], output_file: Op
     md_content = "\n".join(lines)
 
     if output_file:
+        # Create parent directories if they don't exist
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(md_content)
 
